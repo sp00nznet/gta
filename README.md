@@ -73,9 +73,9 @@ src/
 - [ ] Compare executables across all 3 games
 
 ### Phase 1: Disassembly
-- [ ] Recursive-descent disassembly of GTA1 .text section
-- [ ] Function boundary detection
-- [ ] Call graph generation
+- [x] Recursive-descent disassembly of GTA1 .text section (676 KB)
+- [x] Function boundary detection -- **1,957 functions** discovered
+- [x] Call graph generation
 - [ ] Cross-reference analysis
 
 ### Phase 2: Classification
@@ -86,10 +86,11 @@ src/
 - [ ] Classify custom game engine functions
 
 ### Phase 3: Code Lifting (x86 -> C)
-- [ ] Lift classified functions to C
-- [ ] Implement register model (globals for eax/ecx/etc.)
-- [ ] Implement memory access model (VA translation)
-- [ ] Generate dispatch table for indirect calls
+- [x] Lift all 1,957 functions to C -- **238,119 lines**, 0 errors
+- [x] Implement register model (globals for eax/ecx/etc.)
+- [x] Implement memory access model (VA translation)
+- [x] Generate dispatch table for indirect calls (1,957 entries)
+- [x] Generate import bridge stubs (166 imports across 8 DLLs)
 
 ### Phase 4: Shimming
 - [ ] Win32 API -> SDL2 compatibility layer
@@ -99,7 +100,7 @@ src/
 - [ ] DirectPlay -> modern networking
 
 ### Phase 5: Build & Test
-- [ ] CMake build system
+- [x] CMake build system
 - [ ] Runtime memory mapping
 - [ ] VEH crash handler
 - [ ] ICALL dispatch debugging
