@@ -6,14 +6,17 @@ No emulation. The original x86 machine code is lifted to compilable C, linked ag
 
 ## Supported Games
 
-| Game | Year | Engine | Executable | Status |
-|------|------|--------|-----------|--------|
-| Grand Theft Auto | 1997 | Race'n'Chase v1 | `Grand Theft Auto.exe` (774 KB) | **In Progress** |
-| GTA London 1969 | 1999 | Race'n'Chase v1 | `gta_uk.exe` | Planned |
-| GTA London 1961 | 1999 | Race'n'Chase v1 | (shared w/ London 1969) | Planned |
-| Grand Theft Auto 2 | 1999 | Race'n'Chase v2 | `gta2.exe` | Planned |
+| Game | Year | Executable | Code Size | Compiler | Date | Status |
+|------|------|-----------|----------|----------|------|--------|
+| Grand Theft Auto | 1997 | `Grand Theft Auto.exe` | 677 KB | MSVC 6.0 | 2002-11-11 | **Lifted** |
+| Grand Theft Auto | 1997 | `gtawin.exe` (original) | 748 KB | MSVC 4.2 | 1997-10-10 | Analyzed |
+| GTA London 1969 | 1999 | `gta_uk.exe` | 989 KB | MSVC 5.1 | 1999-03-12 | Analyzed |
+| GTA London 1961 | 1999 | `GTA_61.exe` | 992 KB | MSVC 5.1 | 1999-06-25 | Analyzed |
+| Grand Theft Auto 2 | 1999 | `gta2.exe` | 609 KB (TAC packed) | MSVC 5.1 | 1999-12-13 | Blocked (packed) |
 
-All three games share the **Race'n'Chase Game Engine** developed by Mike Dailly at DMA Design. GTA1 and GTA London use the identical engine (London is a mission pack). GTA2 is an evolution with upgraded rendering (DirectX 6/Direct3D) but very similar file formats and game logic.
+All games share the **Race'n'Chase Game Engine** developed by Mike Dailly at DMA Design. GTA1 and GTA London use the identical engine (London is a mission pack). GTA2 is an evolution with upgraded rendering (DirectX 6/Direct3D) but very similar file formats and game logic. All Windows executables export the same 23 `glWindowPos*MESA` functions (embedded SciTech MGL/Mesa renderer) except GTA2 which uses DirectX.
+
+**Note:** GTA2 is TAC-packed (The Anti-Cracker) in all available versions including the official Rockstar freeware release. Runtime dump or dedicated unpacking needed.
 
 ## Architecture
 
