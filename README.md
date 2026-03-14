@@ -100,8 +100,8 @@ src/
 ### Phase 4: Shimming
 - [ ] Win32 API -> SDL2 compatibility layer
 - [ ] SciTech MGL -> OpenGL 4.x renderer
-- [ ] Miles Sound System -> SDL2 audio
-- [ ] Smacker -> modern video decoder
+- [x] Miles Sound System -> SDL2 audio (38 AIL_ functions shimmed)
+- [x] Smacker -> stub decoder (8 ordinals mapped, skips videos)
 - [ ] DirectPlay -> modern networking
 
 ### Phase 5: Build & Test
