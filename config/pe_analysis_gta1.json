@@ -1,0 +1,125 @@
+
+========================================================================
+  PE Analysis: Grand Theft Auto.exe
+  Path: D:\recomp\pc\gta\game\extracted\WINO\Grand Theft Auto.exe
+  Size: 774,144 bytes
+========================================================================
+
+  Machine:       i386
+  Format:        PE32 (EXE)
+  Image Base:    0x00400000
+  Entry Point:   0x0049DC30 (RVA 0x0009DC30)
+  Linker:        6.00
+  Subsystem:     Windows GUI
+  Timestamp:     2002-11-11 16:08:55 UTC (0x3DCFD617)
+  Code Range:    0x00401000 - 0x004A63D9 (676,825 bytes)
+  Data Range:    0x004A7000 - 0x00790298 (3,052,184 bytes)
+
+  Sections (4):
+    .text     VA 0x00001000  VSize 0x000A53D9  Raw 0x00001000  RSize 0x000A6000  [CODE|EXEC|READ]
+    .rdata    VA 0x000A7000  VSize 0x00003ABA  Raw 0x000A7000  RSize 0x00004000  [IDATA|READ]
+    .data     VA 0x000AB000  VSize 0x002E5298  Raw 0x000AB000  RSize 0x00011000  [IDATA|READ|WRITE]
+    .rsrc     VA 0x00391000  VSize 0x000008B0  Raw 0x000BC000  RSize 0x00001000  [IDATA|READ]
+
+  Imports: 166 functions from 8 DLLs
+
+    ADVAPI32.dll (4 functions):
+      0x004A7000  RegCloseKey
+      0x004A7004  RegQueryValueExA
+      0x004A7008  RegOpenKeyExA
+      0x004A700C  RegSetValueExA
+
+    DPLAYX.dll (2 functions):
+      0x004A7014  ordinal 1
+      0x004A7018  ordinal 2
+
+    GDI32.dll (20 functions):
+      0x004A7020  SetSystemPaletteUse
+      0x004A7024  GetDeviceCaps
+      0x004A7028  SelectPalette
+      0x004A702C  RealizePalette
+      0x004A7030  SelectObject
+      0x004A7034  DeleteDC
+      0x004A7038  CreateCompatibleDC
+      0x004A703C  DeleteObject
+      0x004A7040  CreatePalette
+      0x004A7044  GetSystemPaletteUse
+      ... and 10 more
+
+    KERNEL32.dll (63 functions):
+      0x004A7074  HeapReAlloc
+      0x004A7078  VirtualAlloc
+      0x004A707C  VirtualFree
+      0x004A7080  HeapCreate
+      0x004A7084  HeapDestroy
+      0x004A7088  GetVersionExA
+      0x004A708C  IsBadWritePtr
+      0x004A7090  GetEnvironmentVariableA
+      0x004A7094  GetModuleFileNameA
+      0x004A7098  ReadFile
+      ... and 53 more
+
+    USER32.dll (29 functions):
+      0x004A7174  LoadStringA
+      0x004A7178  MessageBoxA
+      0x004A717C  DestroyWindow
+      0x004A7180  EnableWindow
+      0x004A7184  SetActiveWindow
+      0x004A7188  SetForegroundWindow
+      0x004A718C  SetCursor
+      0x004A7190  LoadCursorA
+      0x004A7194  LoadIconA
+      0x004A7198  RegisterClassA
+      ... and 19 more
+
+    WINMM.dll (2 functions):
+      0x004A71EC  joyGetPosEx
+      0x004A71F0  joyGetDevCapsA
+
+    mss32.dll (38 functions):
+      0x004A71F8  _AIL_stream_position@4
+      0x004A71FC  _AIL_set_digital_master_volume@8
+      0x004A7200  _AIL_shutdown@0
+      0x004A7204  _AIL_release_sample_handle@4
+      0x004A7208  _AIL_close_stream@4
+      0x004A720C  _AIL_stream_info@20
+      0x004A7210  _AIL_open_stream@12
+      0x004A7214  _AIL_pause_stream@8
+      0x004A7218  _AIL_startup@0
+      0x004A721C  _AIL_set_stream_loop_count@8
+      ... and 28 more
+
+    smackw32.DLL (8 functions):
+      0x004A7294  ordinal 21
+      0x004A7298  ordinal 19
+      0x004A729C  ordinal 32
+      0x004A72A0  ordinal 28
+      0x004A72A4  ordinal 23
+      0x004A72A8  ordinal 18
+      0x004A72AC  ordinal 14
+      0x004A72B0  ordinal 33
+
+  Exports (23):
+    [  1] 0x00096550  _glWindowPos2dMESA@16
+    [  2] 0x00096610  _glWindowPos2dvMESA@4
+    [  3] 0x00096530  _glWindowPos2fMESA@8
+    [  4] 0x000965F0  _glWindowPos2fvMESA@4
+    [  5] 0x000964C0  _glWindowPos2iMESA@8
+    [  6] 0x00096580  _glWindowPos2ivMESA@4
+    [  7] 0x000964F0  _glWindowPos2sMESA@8
+    [  8] 0x000965B0  _glWindowPos2svMESA@4
+    [  9] 0x00096700  _glWindowPos3dMESA@24
+    [ 10] 0x000967F0  _glWindowPos3dvMESA@4
+    [ 11] 0x000966E0  _glWindowPos3fMESA@12
+    [ 12] 0x000967D0  _glWindowPos3fvMESA@4
+    [ 13] 0x00096640  _glWindowPos3iMESA@12
+    [ 14] 0x00096730  _glWindowPos3ivMESA@4
+    [ 15] 0x00096680  _glWindowPos3sMESA@12
+    [ 16] 0x00096770  _glWindowPos3svMESA@4
+    [ 17] 0x000968D0  _glWindowPos4dMESA@32
+    [ 18] 0x000969E0  _glWindowPos4dvMESA@4
+    [ 19] 0x000969C0  _glWindowPos4fvMESA@4
+    [ 20] 0x00096820  _glWindowPos4iMESA@16
+    [ 21] 0x00096910  _glWindowPos4ivMESA@4
+    [ 22] 0x00096860  _glWindowPos4sMESA@16
+    [ 23] 0x00096950  _glWindowPos4svMESA@4

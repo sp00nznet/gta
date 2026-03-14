@@ -1,0 +1,41 @@
+# Build output
+build/
+cmake-build-*/
+*.obj
+*.o
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.exp
+*.log
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+*.sln.docstates
+
+# Game files (user-supplied, copyrighted)
+game/
+assets/
+*.zip
+*.iso
+*.7z
+*.rar
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Claude
+.claude/
