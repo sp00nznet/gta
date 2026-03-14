@@ -79,11 +79,13 @@ src/
 - [ ] Cross-reference analysis
 
 ### Phase 2: Classification
-- [ ] Identify CRT/SDK library functions
-- [ ] Identify Miles Sound System wrappers
-- [ ] Identify Smacker video wrappers
-- [ ] Identify SciTech MGL rendering functions
-- [ ] Classify custom game engine functions
+- [x] IAT call analysis: 28 functions call imports, **1,869 are pure game logic**
+- [x] Identify Miles Sound System wrappers -- **4 functions**
+- [x] Identify Smacker video wrappers -- **1 function**
+- [x] Identify GDI/rendering functions -- **1 function**
+- [x] Identify KERNEL32/CRT callers -- **25 functions**
+- [ ] Deep classification (CRT vs custom via pattern matching)
+- [ ] Identify SciTech MGL rendering functions (embedded, not via IAT)
 
 ### Phase 3: Code Lifting (x86 -> C)
 - [x] Lift all 1,957 functions to C -- **238,119 lines**, 0 errors
