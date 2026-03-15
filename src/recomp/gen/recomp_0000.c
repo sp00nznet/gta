@@ -34990,6 +34990,9 @@ L_00415303:
 }
 
 void sub_00415310(void) {
+    /* PATCHED: Skip SEH setup - fs:[0] doesn't work in recompiled code */
+    esp += 4; /* pop the cdecl argument */
+    return;
     uint32_t ebp = 0;  /* local frame pointer */
     double _st[8] = {0};  /* FPU stack */
     int _fp_top = 0;

@@ -124,7 +124,7 @@ static void generic_win32_bridge(void) {
 
 /* ===== KERNEL32 bridges ===== */
 static void bridge_GetVersion(void) { eax = (u32)GetVersion(); }
-static void bridge_GetLastError(void) { eax = (u32)GetLastError(); }
+static void bridge_GetLastError(void) { eax = (u32)GetLastError(); fprintf(stderr, "    GetLastError -> %u (0x%X)\n", eax, eax); }
 static void bridge_SetLastError(void) { SetLastError(ARG(1)); esp += 4; }
 static void bridge_GetTickCount(void) { eax = GetTickCount(); }
 static void bridge_Sleep(void) { Sleep(ARG(1)); esp += 4; }
@@ -146,7 +146,7 @@ static void bridge_CreateMutexA(void) {
     fprintf(stderr, "    -> handle=0x%X, GetLastError=%lu\n", eax, GetLastError());
     esp += 12;
 }
-static void bridge_ReleaseMutex(void) { eax = ReleaseMutex((HANDLE)(uintptr_t)ARG(1)); esp += 4; }
+static void bridge_ReleaseMutex(void) { fprintf(stderr, "    ReleaseMutex(0x%X)\n", ARG(1)); eax = ReleaseMutex((HANDLE)(uintptr_t)ARG(1)); esp += 4; }
 static void bridge_LoadLibraryA(void) { eax = (u32)(uintptr_t)LoadLibraryA(VA2STR(ARG(1))); esp += 4; }
 static void bridge_GetProcAddress(void) { eax = (u32)(uintptr_t)GetProcAddress((HMODULE)(uintptr_t)ARG(1), VA2STR(ARG(2))); esp += 8; }
 static void bridge_VirtualAlloc(void) { eax = (u32)(uintptr_t)VirtualAlloc((void*)(uintptr_t)ARG(1), ARG(2), ARG(3), ARG(4)); esp += 16; }
