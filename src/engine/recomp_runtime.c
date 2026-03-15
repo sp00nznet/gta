@@ -213,6 +213,13 @@ void recomp_icall(u32 target_va) {
         return;
     }
 
+    /* Log internal function calls (first 50 only) */
+    static int internal_call_count = 0;
+    if (internal_call_count < 50 && target_va >= 0x401000 && target_va < 0x4A7000) {
+        fprintf(stderr, "  CALL: sub_%08X (esp=0x%08X)\n", target_va, esp);
+        internal_call_count++;
+    }
+
     /* Binary search the main dispatch table */
     int lo = 0, hi = (int)recomp_dispatch_count - 1;
     while (lo <= hi) {
@@ -280,6 +287,14 @@ int recomp_init(void) {
     if (!map_memory()) {
         return 0;
     }
+
+    /* Set up fake Thread Information Block (TIB) at address 0.
+     * The original code accesses fs:[0] for SEH chain management.
+     * The lifter translates fs:[0] as MEM32(0).
+     * We put a valid TIB structure at the start of mapped memory. */
+    MEM32(0x0000) = 0xFFFFFFFF;  /* fs:[0] = SEH chain head (end of list) */
+    MEM32(0x0004) = STACK_BASE_VA;  /* fs:[4] = Stack base (top) */
+    MEM32(0x0008) = STACK_BASE_VA - STACK_SIZE;  /* fs:[8] = Stack limit (bottom) */
 
     /* Initialize stack pointer */
     esp = STACK_BASE_VA - 16;  /* Leave a little headroom */
