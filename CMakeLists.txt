@@ -21,6 +21,7 @@ add_executable(gta1
     # Engine core
     src/engine/main.c
     src/engine/recomp_runtime.c
+    src/engine/iat_bridge.c
 
     # Shim layers
     src/sound/miles_shim.c

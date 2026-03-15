@@ -208,7 +208,12 @@ int load_original_data(const char *exe_path) {
  * Falls back to stderr logging for unresolved calls.
  * ===================================================== */
 void recomp_icall(u32 target_va) {
-    /* Binary search */
+    /* Check IAT bridges first */
+    if (iat_bridge_try_dispatch(target_va)) {
+        return;
+    }
+
+    /* Binary search the main dispatch table */
     int lo = 0, hi = (int)recomp_dispatch_count - 1;
     while (lo <= hi) {
         int mid = (lo + hi) / 2;
@@ -223,16 +228,16 @@ void recomp_icall(u32 target_va) {
         }
     }
 
-    /* Unresolved */
-    fprintf(stderr, "UNRESOLVED ICALL: 0x%08X\n", target_va);
-    fprintf(stderr, "  Recent ICALL trace:\n");
-    for (int i = 0; i < ICALL_TRACE_SIZE; i++) {
-        int idx = (icall_trace_idx - ICALL_TRACE_SIZE + i + ICALL_TRACE_SIZE) % ICALL_TRACE_SIZE;
-        if (icall_trace[idx] != 0) {
-            fprintf(stderr, "    [%2d] 0x%08X%s\n", i, icall_trace[idx],
-                    (i == ICALL_TRACE_SIZE - 1) ? " <-- latest" : "");
-        }
+    /* Unresolved -- log but don't crash */
+    static int unresolved_count = 0;
+    unresolved_count++;
+    if (unresolved_count <= 20) {
+        fprintf(stderr, "UNRESOLVED ICALL #%d: 0x%08X\n", unresolved_count, target_va);
+    } else if (unresolved_count == 21) {
+        fprintf(stderr, "  (suppressing further ICALL warnings)\n");
     }
+    /* Return 0 in eax as a safe default */
+    eax = 0;
 }
 
 /* =====================================================
