@@ -66,6 +66,7 @@ if(MSVC)
         /DYNAMICBASE:NO       # No ASLR (need fixed addresses for VA translation)
         /STACK:8388608        # 8MB stack
         /LARGEADDRESSAWARE:NO # Stay in 32-bit address space
+        /BASE:0x10000000      # Move our exe out of the way so we can map at 0x400000
     )
     target_compile_options(gta1 PRIVATE
         /W3
