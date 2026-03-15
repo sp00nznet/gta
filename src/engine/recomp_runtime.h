@@ -219,4 +219,8 @@ int recomp_init(void);
 void recomp_shutdown(void);
 int load_original_data(const char *exe_path);
 
+/* IAT bridge system */
+void setup_iat_bridges(void);
+int iat_bridge_try_dispatch(u32 target_va);
+
 #endif /* GTA_RECOMP_RUNTIME_H */
