@@ -3,9 +3,7 @@
 #include "../../engine/recomp_runtime.h"
 #include "recomp_funcs.h"
 
-typedef struct { uint32_t addr; void (*func)(void); } recomp_entry_t;
-
-const recomp_entry_t recomp_dispatch_table[] = {
+const recomp_dispatch_entry_t recomp_dispatch_table[] = {
     { 0x00401000u, sub_00401000 },
     { 0x00401050u, sub_00401050 },
     { 0x004010D0u, sub_004010D0 },

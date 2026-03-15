@@ -4,6 +4,17 @@
 
 /* 1957 recompiled functions */
 
+/* Stub declarations for functions not in the discovery set */
+void sub_00417B70(void);  /* undiscovered */
+void sub_0041ADB0(void);  /* undiscovered */
+void sub_0042E0E0(void);  /* undiscovered */
+void sub_0042E180(void);  /* undiscovered */
+void sub_0042E220(void);  /* undiscovered */
+void sub_00472980(void);  /* undiscovered */
+void sub_00474A20(void);  /* undiscovered */
+void sub_E942E951(void);  /* bogus address -- likely disassembly artifact */
+
+
 void sub_00401000(void);  /* 0x00401000 */
 void sub_00401050(void);  /* 0x00401050 */
 void sub_004010D0(void);  /* 0x004010D0 */

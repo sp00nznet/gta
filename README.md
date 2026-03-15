@@ -106,10 +106,11 @@ src/
 
 ### Phase 5: Build & Test
 - [x] CMake build system
-- [ ] Runtime memory mapping
-- [ ] VEH crash handler
-- [ ] ICALL dispatch debugging
-- [ ] First successful launch
+- [x] Runtime memory mapping (VirtualAlloc at original image base)
+- [x] VEH crash handler with register dump
+- [x] ICALL dispatch (binary search over 1,957-entry table)
+- [x] **First successful build** -- 1.7 MB native Win32 executable
+- [ ] First successful launch (needs original game data)
 
 ## Building
 

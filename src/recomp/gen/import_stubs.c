@@ -4,8 +4,7 @@
 #include "../../engine/recomp_runtime.h"
 #include <stdio.h>
 
-#define STUB(name) fprintf(stderr, "STUB: %s
-", name)
+#define STUB(name) fprintf(stderr, "STUB: %s\n", name)
 
 
 /* ===== ADVAPI32.dll (4 functions) ===== */

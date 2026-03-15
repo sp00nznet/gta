@@ -4,6 +4,7 @@
 
 #define RECOMP_GENERATED_CODE
 #include "../../engine/recomp_runtime.h"
+#include "recomp_funcs.h"
 #include <math.h>
 #include <string.h>
 
@@ -25162,7 +25163,7 @@ L_0049E937:
     fp_pop();
     /* fnstsw - FPU status to ax */ /* 0x0049E967: fnstsw ax */
     /* sahf - load flags from ah */ /* 0x0049E969: sahf  */
-    if (/* flag from fcom */ CMP_BE(_fpu_cmp)) goto L_0049E971; /* 0x0049E96A: jbe 0x49e971 */
+    if (/* flag from fcom */ FPU_CMP_BE(_fpu_cmp)) goto L_0049E971; /* 0x0049E96A: jbe 0x49e971 */
 
 L_0049E96C:
     PUSH32(esp, 1); /* 0x0049E96C: push 1 */
@@ -25204,7 +25205,7 @@ L_0049E937:
     fp_pop();
     /* fnstsw - FPU status to ax */ /* 0x0049E967: fnstsw ax */
     /* sahf - load flags from ah */ /* 0x0049E969: sahf  */
-    if (/* flag from fcom */ CMP_BE(_fpu_cmp)) goto L_0049E971; /* 0x0049E96A: jbe 0x49e971 */
+    if (/* flag from fcom */ FPU_CMP_BE(_fpu_cmp)) goto L_0049E971; /* 0x0049E96A: jbe 0x49e971 */
 
 L_0049E96C:
     PUSH32(esp, 1); /* 0x0049E96C: push 1 */

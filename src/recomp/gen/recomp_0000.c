@@ -4,6 +4,7 @@
 
 #define RECOMP_GENERATED_CODE
 #include "../../engine/recomp_runtime.h"
+#include "recomp_funcs.h"
 #include <math.h>
 #include <string.h>
 

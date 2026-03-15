@@ -6,10 +6,25 @@
  */
 
 #include "miles_shim.h"
-#include <SDL2/SDL.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+
+#if HAS_SDL2
+#include <SDL2/SDL.h>
+#else
+/* Stub SDL types when SDL2 is not available */
+typedef u32 SDL_AudioDeviceID;
+typedef u32 SDL_TimerID;
+static u32 SDL_GetTicks(void) { return 0; }
+static int SDL_InitSubSystem(u32 f) { return 0; }
+static void SDL_QuitSubSystem(u32 f) {}
+static SDL_TimerID SDL_AddTimer(u32 ms, void *cb, void *p) { return 0; }
+static int SDL_RemoveTimer(SDL_TimerID t) { return 0; }
+static const char *SDL_GetError(void) { return "SDL2 not available"; }
+#define SDL_INIT_AUDIO 0
+#define SDL_INIT_TIMER 0
+#endif
 
 /* --- Internal state --- */
 
@@ -326,7 +341,11 @@ s32 AIL_digital_master_volume(HDIGDRIVER dig) {
 
 /* --- Timers --- */
 
+#if HAS_SDL2
 static Uint32 timer_callback_wrapper(Uint32 interval, void *param) {
+#else
+static u32 timer_callback_wrapper(u32 interval, void *param) {
+#endif
     MSS_Timer *t = (MSS_Timer *)param;
     if (t->callback) {
         t->callback(t->user);
