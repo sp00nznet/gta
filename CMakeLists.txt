@@ -9,83 +9,69 @@ if(WIN32)
 endif()
 
 # --- Dependencies ---
-find_package(SDL2 REQUIRED)
-find_package(OpenGL REQUIRED)
+# SDL2 is optional for now -- stub out if not found
+find_package(SDL2 QUIET)
+find_package(OpenGL QUIET)
 
-# --- Common engine sources (shared across GTA1/London/GTA2) ---
-set(COMMON_SOURCES
-    # src/common/types.h
-    # src/common/memory.c
-    # src/common/math.c
-)
-
-set(ENGINE_SOURCES
-    # src/engine/main.c
-    # src/engine/win32_compat.h
-    # src/engine/filesystem.c
-    # src/engine/input.c
-)
-
-set(RENDERER_SOURCES
-    # src/renderer/renderer.c
-    # src/renderer/tiles.c
-    # src/renderer/sprites.c
-)
-
-set(SOUND_SOURCES
-    # src/sound/sound.c
-    # src/sound/miles_shim.c
-)
-
-set(VIDEO_SOURCES
-    # src/video/smacker.c
-)
-
-set(NET_SOURCES
-    # src/net/dplay_shim.c
-)
+# --- Collect generated recompiled sources ---
+file(GLOB GTA1_RECOMP_SOURCES "src/recomp/gen/recomp_*.c")
 
 # --- GTA1 target ---
-set(GTA1_SOURCES
-    # src/gta1/game.c
-    # Lifted code will go here:
-    # src/recomp/gen/gta1_funcs_0001.c
-    # src/recomp/gen/gta1_funcs_0002.c
-    # ...
-)
-
 add_executable(gta1
-    ${COMMON_SOURCES}
-    ${ENGINE_SOURCES}
-    ${RENDERER_SOURCES}
-    ${SOUND_SOURCES}
-    ${VIDEO_SOURCES}
-    ${NET_SOURCES}
-    ${GTA1_SOURCES}
+    # Engine core
+    src/engine/main.c
+    src/engine/recomp_runtime.c
+
+    # Shim layers
+    src/sound/miles_shim.c
+    src/video/smacker_shim.c
+
+    # Generated recompiled code
+    ${GTA1_RECOMP_SOURCES}
+
+    # Generated stubs for undiscovered functions
+    src/recomp/gen/recomp_stubs.c
+
+    # Import stubs (TODO: fix @ character in MSS function names)
+    # src/recomp/gen/import_stubs.c
 )
 
 target_include_directories(gta1 PRIVATE
     src/
     src/common/
     src/engine/
+    src/recomp/gen/
 )
 
-target_link_libraries(gta1 PRIVATE
-    SDL2::SDL2
-    OpenGL::GL
-    ws2_32
-    winmm
-)
+# Link libraries
+if(SDL2_FOUND)
+    target_link_libraries(gta1 PRIVATE SDL2::SDL2)
+    target_compile_definitions(gta1 PRIVATE HAS_SDL2=1)
+else()
+    message(WARNING "SDL2 not found -- audio/video shims will be stubbed")
+    target_compile_definitions(gta1 PRIVATE HAS_SDL2=0)
+endif()
+
+if(OpenGL_FOUND)
+    target_link_libraries(gta1 PRIVATE OpenGL::GL)
+endif()
+
+if(WIN32)
+    target_link_libraries(gta1 PRIVATE ws2_32 winmm)
+endif()
 
 # Critical linker settings for recompiled code
 if(MSVC)
     target_link_options(gta1 PRIVATE
         /DYNAMICBASE:NO       # No ASLR (need fixed addresses for VA translation)
         /STACK:8388608        # 8MB stack
+        /LARGEADDRESSAWARE:NO # Stay in 32-bit address space
     )
     target_compile_options(gta1 PRIVATE
         /W3
-        /wd4244 /wd4018 /wd4267  # Suppress conversion warnings from lifted code
+        /wd4244 /wd4018 /wd4267 /wd4146  # Suppress conversion warnings from lifted code
+        /wd4305 /wd4309 /wd4028 /wd4113   # More lifted code warnings
+        /bigobj                            # Large object files from 500-function chunks
     )
 endif()
 
