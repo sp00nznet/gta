@@ -70,31 +70,40 @@ static void *g_heap_alloc;
 
 static int map_memory(void) {
 #ifdef _WIN32
-    /* Map the image region (covers .text, .data, .rdata, .rsrc) */
-    g_image_alloc = VirtualAlloc(
-        (void *)(uintptr_t)DATA_START_VA,
-        DATA_END_VA - DATA_START_VA,
-        MEM_RESERVE | MEM_COMMIT,
-        PAGE_READWRITE
-    );
+    /* Check if premap (TLS callback) reserved our range */
+    extern void *get_premap_alloc(void);
+    void *premap = get_premap_alloc();
+    if (premap) {
+        fprintf(stderr, "Pre-mapped region found at %p\n", premap);
+        /* Commit the parts we need from the pre-reserved range */
+        g_image_alloc = VirtualAlloc(
+            (void *)(uintptr_t)DATA_START_VA,
+            DATA_END_VA - DATA_START_VA,
+            MEM_COMMIT,
+            PAGE_READWRITE
+        );
+    } else {
+        /* No premap - try direct allocation */
+        g_image_alloc = VirtualAlloc(
+            (void *)(uintptr_t)DATA_START_VA,
+            DATA_END_VA - DATA_START_VA,
+            MEM_RESERVE | MEM_COMMIT,
+            PAGE_READWRITE
+        );
+    }
     if (!g_image_alloc) {
-        /* Try MEM_RESERVE first to find conflicting allocation, then commit */
         fprintf(stderr, "WARNING: Cannot map at 0x%08X (error %lu), trying offset-based approach\n",
                 DATA_START_VA, GetLastError());
 
-        /* Allocate anywhere and use offset */
         g_image_alloc = VirtualAlloc(
-            NULL,
-            DATA_END_VA,  /* Allocate full range from 0 */
+            NULL, DATA_END_VA,
             MEM_RESERVE | MEM_COMMIT,
             PAGE_READWRITE
         );
         if (!g_image_alloc) {
-            fprintf(stderr, "FATAL: Failed to allocate %u MB for memory mapping (error %lu)\n",
-                    DATA_END_VA / (1024*1024), GetLastError());
+            fprintf(stderr, "FATAL: Failed to allocate memory (error %lu)\n", GetLastError());
             return 0;
         }
-        /* Set base so that g_mem_base + VA gives the right pointer */
         g_mem_base = (u8 *)g_image_alloc;
         fprintf(stderr, "  Using offset-based mapping at %p\n", g_image_alloc);
     }
