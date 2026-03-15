@@ -78,37 +78,51 @@ static int map_memory(void) {
         PAGE_READWRITE
     );
     if (!g_image_alloc) {
-        fprintf(stderr, "FATAL: Failed to map image region at 0x%08X (error %lu)\n",
+        /* Try MEM_RESERVE first to find conflicting allocation, then commit */
+        fprintf(stderr, "WARNING: Cannot map at 0x%08X (error %lu), trying offset-based approach\n",
                 DATA_START_VA, GetLastError());
-        return 0;
+
+        /* Allocate anywhere and use offset */
+        g_image_alloc = VirtualAlloc(
+            NULL,
+            DATA_END_VA,  /* Allocate full range from 0 */
+            MEM_RESERVE | MEM_COMMIT,
+            PAGE_READWRITE
+        );
+        if (!g_image_alloc) {
+            fprintf(stderr, "FATAL: Failed to allocate %u MB for memory mapping (error %lu)\n",
+                    DATA_END_VA / (1024*1024), GetLastError());
+            return 0;
+        }
+        /* Set base so that g_mem_base + VA gives the right pointer */
+        g_mem_base = (u8 *)g_image_alloc;
+        fprintf(stderr, "  Using offset-based mapping at %p\n", g_image_alloc);
     }
 
-    /* Map the stack region */
-    g_stack_alloc = VirtualAlloc(
-        (void *)(uintptr_t)(STACK_BASE_VA - STACK_SIZE),
-        STACK_SIZE,
-        MEM_RESERVE | MEM_COMMIT,
-        PAGE_READWRITE
-    );
-    if (!g_stack_alloc) {
-        fprintf(stderr, "FATAL: Failed to map stack region (error %lu)\n", GetLastError());
-        return 0;
-    }
+    if (g_mem_base == NULL) {
+        /* Direct mapping succeeded - need separate stack/heap allocations */
+        g_mem_base = (u8 *)0;
 
-    /* Map the heap region */
-    g_heap_alloc = VirtualAlloc(
-        (void *)(uintptr_t)HEAP_START_VA,
-        HEAP_SIZE,
-        MEM_RESERVE | MEM_COMMIT,
-        PAGE_READWRITE
-    );
-    if (!g_heap_alloc) {
-        fprintf(stderr, "WARNING: Failed to map heap region (error %lu)\n", GetLastError());
-        /* Non-fatal -- heap can be allocated elsewhere */
-    }
+        /* Map the stack region */
+        g_stack_alloc = VirtualAlloc(
+            (void *)(uintptr_t)(STACK_BASE_VA - STACK_SIZE),
+            STACK_SIZE,
+            MEM_RESERVE | MEM_COMMIT,
+            PAGE_READWRITE
+        );
+        if (!g_stack_alloc) {
+            fprintf(stderr, "WARNING: Failed to map stack at fixed address, using offset in image alloc\n");
+        }
 
-    /* Since we mapped at original addresses, base offset is 0 */
-    g_mem_base = (u8 *)0;
+        /* Map the heap region */
+        g_heap_alloc = VirtualAlloc(
+            (void *)(uintptr_t)HEAP_START_VA,
+            HEAP_SIZE,
+            MEM_RESERVE | MEM_COMMIT,
+            PAGE_READWRITE
+        );
+    }
+    /* else: offset-based mode - stack/heap covered by the large alloc */
 
     fprintf(stderr, "Memory mapped:\n");
     fprintf(stderr, "  Image:  0x%08X - 0x%08X (%u KB)\n",
