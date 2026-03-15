@@ -213,10 +213,10 @@ void recomp_icall(u32 target_va) {
         return;
     }
 
-    /* Log internal function calls (first 50 only) */
+    /* Log ALL internal function calls (first 200) */
     static int internal_call_count = 0;
-    if (internal_call_count < 50 && target_va >= 0x401000 && target_va < 0x4A7000) {
-        fprintf(stderr, "  CALL: sub_%08X (esp=0x%08X)\n", target_va, esp);
+    if (internal_call_count < 200) {
+        fprintf(stderr, "  ICALL: 0x%08X (esp=0x%08X)\n", target_va, esp);
         internal_call_count++;
     }
 
