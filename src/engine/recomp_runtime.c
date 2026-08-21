@@ -1,19 +1,20 @@
 /*
  * Recompilation runtime for GTA static recompilation.
  *
- * Handles:
- *   - Memory mapping at original image base via VirtualAlloc
- *   - Global x86 register storage
- *   - Indirect call dispatch (binary search over dispatch table)
- *   - VEH crash handler with register dump
- *   - ICALL trace ring buffer for debugging
+ * Memory model (Fury3 layout -- fixed-base, no offset fallback):
+ *
+ *   0x00100000  TIB      simulated TEB, 1 page (fs: base)
+ *   0x00200000  stack    1 MB, grows down from 0x00300000
+ *   0x00390000  scratch  64 KB for host strings handed to the game
+ *   0x00400000  image    the original .text/.rdata/.data at their real VAs
+ *
+ * Offset-based mapping is deliberately NOT supported: it works for data reads
+ * and silently breaks every pointer the game stores. If 0x400000 cannot be had,
+ * that is a link-base problem in this host exe, not something to work around.
  */
 
-#include "recomp_runtime.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
+/* windows.h first: winnt.h contains inline asm ("mov eax, ...") that the
+ * RECOMP_GENERATED_CODE register aliases below would rewrite. */
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -21,321 +22,231 @@
 #include <windows.h>
 #endif
 
-/* =====================================================
- * Global register storage
- * ===================================================== */
-u32 eax, ebx, ecx, edx;
-u32 esi, edi, ebp, esp;
-u32 eflags;
+#define RECOMP_GENERATED_CODE
+#include "recomp_runtime.h"
+#include "image_loader.h"
+#include "hybrid.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
-f64 fpu_stack[8];
-int fpu_top;
 
-/* FPU stack for fp_push/fp_pop */
-f64 fpu_st[8];
-int fpu_sp;
+/* ===== global register model (contract: recomp_types.h) ===== */
+uint32_t g_eax, g_ecx, g_edx, g_esp;
+uint32_t g_ebx, g_esi, g_edi;
+double   g_st[8];
+int      g_fp_top;
+uint16_t g_fpu_cw = 0x037F;
+uint16_t g_seg_cs, g_seg_ds, g_seg_es, g_seg_fs, g_seg_gs, g_seg_ss;
 
-/* Memory base pointer */
-u8 *g_mem_base;
+ptrdiff_t g_mem_base = 0;      /* fixed-base mapping: VA == host address */
+uint32_t  g_fs_base  = 0;
+uint32_t  g_gs_base  = 0;
 
-/* ICALL trace */
-u32 icall_trace[ICALL_TRACE_SIZE];
-int icall_trace_idx;
+uint32_t g_icall_trace[ICALL_TRACE_SIZE];
+uint32_t g_icall_trace_idx;
+uint32_t g_icall_count;
+uint32_t g_cur_func;
 
-/* =====================================================
- * Memory mapping
- *
- * We VirtualAlloc at address 0 to get the full 32-bit
- * address space mapped. Then g_mem_base = 0 so all
- * original VAs work directly via MEM32(addr).
- *
- * The original GTA1 binary uses:
- *   .text:  0x00401000 - 0x004A63D9  (code)
- *   .rdata: 0x004A7000 - 0x004AAABA  (read-only data)
- *   .data:  0x004AB000 - 0x00790298  (read-write data)
- *   .rsrc:  0x00791000 - 0x007918B0  (resources)
- *   Stack:  somewhere below 0x00400000
- * ===================================================== */
-
-#define STACK_SIZE       (8 * 1024 * 1024)  /* 8MB stack */
-#define STACK_BASE_VA    0x00100000          /* Stack grows down from here */
-#define DATA_START_VA    0x00400000          /* Image base */
-#define DATA_END_VA      0x00800000          /* Past end of all sections */
-#define HEAP_START_VA    0x00800000          /* Heap area */
-#define HEAP_SIZE        (64 * 1024 * 1024)  /* 64MB heap */
-
-static void *g_stack_alloc;
-static void *g_image_alloc;
-static void *g_heap_alloc;
-
-static int map_memory(void) {
-#ifdef _WIN32
-    /* Check if premap (TLS callback) reserved our range */
-    extern void *get_premap_alloc(void);
-    void *premap = get_premap_alloc();
-    if (premap) {
-        fprintf(stderr, "Pre-mapped region found at %p\n", premap);
-        /* Commit the parts we need from the pre-reserved range */
-        g_image_alloc = VirtualAlloc(
-            (void *)(uintptr_t)DATA_START_VA,
-            DATA_END_VA - DATA_START_VA,
-            MEM_COMMIT,
-            PAGE_READWRITE
-        );
-    } else {
-        /* No premap - try direct allocation */
-        g_image_alloc = VirtualAlloc(
-            (void *)(uintptr_t)DATA_START_VA,
-            DATA_END_VA - DATA_START_VA,
-            MEM_RESERVE | MEM_COMMIT,
-            PAGE_READWRITE
-        );
-    }
-    if (!g_image_alloc) {
-        fprintf(stderr, "WARNING: Cannot map at 0x%08X (error %lu), trying offset-based approach\n",
-                DATA_START_VA, GetLastError());
-
-        g_image_alloc = VirtualAlloc(
-            NULL, DATA_END_VA,
-            MEM_RESERVE | MEM_COMMIT,
-            PAGE_READWRITE
-        );
-        if (!g_image_alloc) {
-            fprintf(stderr, "FATAL: Failed to allocate memory (error %lu)\n", GetLastError());
-            return 0;
-        }
-        g_mem_base = (u8 *)g_image_alloc;
-        fprintf(stderr, "  Using offset-based mapping at %p\n", g_image_alloc);
-    }
-
-    if (g_mem_base == NULL) {
-        /* Direct mapping succeeded - need separate stack/heap allocations */
-        g_mem_base = (u8 *)0;
-
-        /* Map the stack region */
-        g_stack_alloc = VirtualAlloc(
-            (void *)(uintptr_t)(STACK_BASE_VA - STACK_SIZE),
-            STACK_SIZE,
-            MEM_RESERVE | MEM_COMMIT,
-            PAGE_READWRITE
-        );
-        if (!g_stack_alloc) {
-            fprintf(stderr, "WARNING: Failed to map stack at fixed address, using offset in image alloc\n");
-        }
-
-        /* Map the heap region */
-        g_heap_alloc = VirtualAlloc(
-            (void *)(uintptr_t)HEAP_START_VA,
-            HEAP_SIZE,
-            MEM_RESERVE | MEM_COMMIT,
-            PAGE_READWRITE
-        );
-    }
-    /* else: offset-based mode - stack/heap covered by the large alloc */
-
-    fprintf(stderr, "Memory mapped:\n");
-    fprintf(stderr, "  Image:  0x%08X - 0x%08X (%u KB)\n",
-            DATA_START_VA, DATA_END_VA, (DATA_END_VA - DATA_START_VA) / 1024);
-    fprintf(stderr, "  Stack:  0x%08X - 0x%08X (%u KB)\n",
-            STACK_BASE_VA - STACK_SIZE, STACK_BASE_VA, STACK_SIZE / 1024);
-    if (g_heap_alloc) {
-        fprintf(stderr, "  Heap:   0x%08X - 0x%08X (%u MB)\n",
-                HEAP_START_VA, HEAP_START_VA + HEAP_SIZE, HEAP_SIZE / (1024*1024));
-    }
-
-    return 1;
-#else
-    /* Non-Windows: use malloc and set g_mem_base as offset */
-    g_mem_base = (u8 *)calloc(1, DATA_END_VA);
-    if (!g_mem_base) {
-        fprintf(stderr, "FATAL: Failed to allocate memory\n");
-        return 0;
-    }
-    return 1;
+#ifdef RECOMP_TRACE
+uint32_t g_enter_trace[RECOMP_ENTER_SIZE];
+uint32_t g_enter_idx;
+void recomp_trace_enter(uint32_t va) {
+    g_enter_trace[g_enter_idx & (RECOMP_ENTER_SIZE - 1)] = va;
+    g_enter_idx++;
+}
 #endif
-}
 
-/* =====================================================
- * Load original binary data into mapped memory
- * ===================================================== */
-int load_original_data(const char *exe_path) {
-    FILE *f = fopen(exe_path, "rb");
-    if (!f) {
-        fprintf(stderr, "WARNING: Could not open original exe: %s\n", exe_path);
+/* ===== memory layout ===== */
+#define GTA_IMAGE_BASE   0x00400000u
+#define GTA_TIB_SIZE     0x00001000u
+#define GTA_STACK_SIZE   0x00100000u
+#define GTA_SCRATCH_SIZE 0x00010000u
+
+static void *g_tib_view, *g_stack_view, *g_scratch_view;
+static uint32_t g_stack_base, g_scratch_base, g_scratch_next;
+
+/* Bump-allocate scratch VA space for strings the host hands to the game
+ * (command line, module path). Never inside the image: that would overwrite
+ * .data the game is still using. */
+uint32_t recomp_scratch_alloc(uint32_t n) {
+    uint32_t va = g_scratch_next;
+    n = (n + 15u) & ~15u;
+    if (va + n > g_scratch_base + GTA_SCRATCH_SIZE) {
+        fprintf(stderr, "[scratch] exhausted\n");
         return 0;
     }
-
-    /* Read PE headers to find section layout */
-    u8 header[4096];
-    size_t nread = fread(header, 1, sizeof(header), f);
-    if (nread < 0x100) {
-        fclose(f);
-        return 0;
-    }
-
-    /* Parse PE header */
-    u32 pe_offset = *(u32 *)(header + 0x3C);
-    if (pe_offset + 0x18 > nread) { fclose(f); return 0; }
-
-    u16 num_sections = *(u16 *)(header + pe_offset + 0x06);
-    u16 opt_header_size = *(u16 *)(header + pe_offset + 0x14);
-    u32 image_base = *(u32 *)(header + pe_offset + 0x34);
-
-    u8 *section_table = header + pe_offset + 0x18 + opt_header_size;
-
-    fprintf(stderr, "Loading %d sections from %s (image base 0x%08X)\n",
-            num_sections, exe_path, image_base);
-
-    for (int i = 0; i < num_sections && i < 16; i++) {
-        u8 *sec = section_table + i * 40;
-        char name[9] = {0};
-        memcpy(name, sec, 8);
-        u32 vsize = *(u32 *)(sec + 8);
-        u32 va = *(u32 *)(sec + 12);
-        u32 raw_size = *(u32 *)(sec + 16);
-        u32 raw_offset = *(u32 *)(sec + 20);
-
-        u32 target_va = image_base + va;
-        u32 copy_size = (raw_size < vsize) ? raw_size : vsize;
-
-        if (copy_size > 0 && target_va >= DATA_START_VA && target_va < DATA_END_VA) {
-            fseek(f, raw_offset, SEEK_SET);
-            size_t read = fread(g_mem_base + target_va, 1, copy_size, f);
-            fprintf(stderr, "  %-8s VA 0x%08X  size 0x%06X  loaded %zu bytes\n",
-                    name, target_va, vsize, read);
-        }
-    }
-
-    fclose(f);
-    return 1;
+    g_scratch_next = va + n;
+    return va;
 }
 
-/* =====================================================
- * Indirect call dispatch
- *
- * Binary search over the sorted dispatch table.
- * Falls back to stderr logging for unresolved calls.
- * ===================================================== */
-void recomp_icall(u32 target_va) {
-    /* Check IAT bridges first */
-    if (iat_bridge_try_dispatch(target_va)) {
-        return;
-    }
+uint32_t recomp_scratch_str(const char *s) {
+    uint32_t n = (uint32_t)strlen(s) + 1;
+    uint32_t va = recomp_scratch_alloc(n);
+    if (va) memcpy((void *)(uintptr_t)ADDR(va), s, n);
+    return va;
+}
 
-    /* Log ALL internal function calls (first 200) */
-    static int internal_call_count = 0;
-    if (internal_call_count < 200) {
-        fprintf(stderr, "  ICALL: 0x%08X (esp=0x%08X)\n", target_va, esp);
-        internal_call_count++;
-    }
-
-    /* Binary search the main dispatch table */
+/* ===== dispatch ===== */
+recomp_func_t recomp_lookup(uint32_t va) {
     int lo = 0, hi = (int)recomp_dispatch_count - 1;
     while (lo <= hi) {
         int mid = (lo + hi) / 2;
-        u32 addr = recomp_dispatch_table[mid].addr;
-        if (addr == target_va) {
-            recomp_dispatch_table[mid].func();
-            return;
-        } else if (addr < target_va) {
-            lo = mid + 1;
-        } else {
-            hi = mid - 1;
-        }
+        uint32_t a = recomp_dispatch_table[mid].address;
+        if (a == va) return recomp_dispatch_table[mid].func;
+        if (a < va) lo = mid + 1; else hi = mid - 1;
     }
-
-    /* Unresolved -- log but don't crash */
-    static int unresolved_count = 0;
-    unresolved_count++;
-    if (unresolved_count <= 20) {
-        fprintf(stderr, "UNRESOLVED ICALL #%d: 0x%08X\n", unresolved_count, target_va);
-    } else if (unresolved_count == 21) {
-        fprintf(stderr, "  (suppressing further ICALL warnings)\n");
-    }
-    /* Return 0 in eax as a safe default */
-    eax = 0;
+    return NULL;
 }
 
-/* =====================================================
- * VEH crash handler (Windows only)
- * ===================================================== */
+/* ===== lifted -> real =====
+ *
+ * GTA loads ddraw.dll itself and calls DirectDrawCreate through the pointer
+ * GetProcAddress hands back, then dispatches every IDirectDraw method through
+ * a COM vtable. Those targets are real host code, so dispatch has to be able to
+ * leave the lifted world and come back.
+ *
+ * hybrid_call_machine runs the real function with esp pointing at the SIMULATED
+ * stack, so a stdcall callee pops its own arguments and we never need to know
+ * how many there were -- which is the only reason this works for COM, where
+ * every vtable slot has a different arity.
+ */
+static uint32_t g_image_span;
+
+static int is_host_code(uint32_t va) {
+    MEMORY_BASIC_INFORMATION mbi;
+    if (va >= GTA_IMAGE_BASE && va < GTA_IMAGE_BASE + g_image_span)
+        return 0;                      /* the game's own image: lifted, not real */
+    if (!VirtualQuery((void *)(uintptr_t)va, &mbi, sizeof(mbi)))
+        return 0;
+    return mbi.State == MEM_COMMIT
+        && mbi.Type  == MEM_IMAGE
+        && (mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ |
+                           PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) != 0;
+}
+
+/* Read at thunk entry, before the real code can nest another dispatch. */
+static uint32_t g_pending_host_target;
+static int g_host_call_verbose = 1;
+
+static void host_call_thunk(void) {
+    hybrid_regs r;
+    uint32_t target = g_pending_host_target;
+
+    r.eax = g_eax; r.ecx = g_ecx; r.edx = g_edx; r.ebx = g_ebx;
+    r.esp = g_esp; r.esi = g_esi; r.edi = g_edi;
+    r.ebp = 0;     /* lifted ebp is per-function; real callees here don't use ours */
+
+    hybrid_call_machine(&r, target);
+
+    if (g_host_call_verbose)
+        fprintf(stderr, "  HOSTCALL: 0x%08X from 0x%08X -> eax=0x%08X\n",
+                target, g_cur_func, r.eax);
+
+    g_eax = r.eax; g_ecx = r.ecx; g_edx = r.edx; g_ebx = r.ebx;
+    g_esp = r.esp; g_esi = r.esi; g_edi = r.edi;
+}
+
+recomp_func_t recomp_lookup_manual(uint32_t va) {
+    if (is_host_code(va)) {
+        g_pending_host_target = va;
+        return host_call_thunk;
+    }
+    return NULL;
+}
+
+recomp_func_t recomp_lookup_import(uint32_t va) { return iat_bridge_lookup(va); }
+
+void recomp_dump_trace(const char *why) {
+    fprintf(stderr, "--- trace (%s): cur_func=0x%08X, %u icalls ---\n",
+            why ? why : "?", g_cur_func, g_icall_count);
+    for (uint32_t i = 0; i < ICALL_TRACE_SIZE; i++) {
+        uint32_t idx = (g_icall_trace_idx - ICALL_TRACE_SIZE + i) & (ICALL_TRACE_SIZE - 1);
+        if (g_icall_trace[idx]) fprintf(stderr, "  [%2u] 0x%08X\n", i, g_icall_trace[idx]);
+    }
+#ifdef RECOMP_TRACE
+    fprintf(stderr, "--- last %d functions entered ---\n", RECOMP_ENTER_SIZE);
+    for (uint32_t i = 0; i < RECOMP_ENTER_SIZE; i++) {
+        uint32_t idx = (g_enter_idx - RECOMP_ENTER_SIZE + i) & (RECOMP_ENTER_SIZE - 1);
+        if (g_enter_trace[idx]) fprintf(stderr, "  0x%08X\n", g_enter_trace[idx]);
+    }
+#endif
+    fflush(stderr);
+}
+
+/* ===== crash handler ===== */
 #ifdef _WIN32
 static LONG WINAPI crash_handler(EXCEPTION_POINTERS *ep) {
-    DWORD code = ep->ExceptionRecord->ExceptionCode;
-    void *addr = ep->ExceptionRecord->ExceptionAddress;
-
-    fprintf(stderr, "\n=== CRASH ===\n");
-    fprintf(stderr, "Exception 0x%08lX at 0x%p\n", code, addr);
-    fprintf(stderr, "Registers:\n");
-    fprintf(stderr, "  eax=0x%08X  ebx=0x%08X  ecx=0x%08X  edx=0x%08X\n",
-            eax, ebx, ecx, edx);
-    fprintf(stderr, "  esi=0x%08X  edi=0x%08X  ebp=0x%08X  esp=0x%08X\n",
-            esi, edi, ebp, esp);
-    fprintf(stderr, "Recent ICALL trace:\n");
-    for (int i = 0; i < ICALL_TRACE_SIZE; i++) {
-        int idx = (icall_trace_idx - ICALL_TRACE_SIZE + i + ICALL_TRACE_SIZE) % ICALL_TRACE_SIZE;
-        if (icall_trace[idx] != 0) {
-            fprintf(stderr, "  [%2d] 0x%08X\n", i, icall_trace[idx]);
-        }
-    }
-    fprintf(stderr, "=============\n");
-    fflush(stderr);
-
+    fprintf(stderr, "\n=== CRASH: exception 0x%08lX at %p ===\n",
+            ep->ExceptionRecord->ExceptionCode, ep->ExceptionRecord->ExceptionAddress);
+    fprintf(stderr, "  eax=%08X ecx=%08X edx=%08X ebx=%08X\n", g_eax, g_ecx, g_edx, g_ebx);
+    fprintf(stderr, "  esi=%08X edi=%08X esp=%08X\n", g_esi, g_edi, g_esp);
+    recomp_dump_trace("VEH");
     return EXCEPTION_CONTINUE_SEARCH;
 }
 #endif
 
-/* =====================================================
- * Initialization / Shutdown
- * ===================================================== */
+/* ===== init / shutdown ===== */
 int recomp_init(void) {
     fprintf(stderr, "GTA Static Recompilation Runtime\n");
-    fprintf(stderr, "================================\n");
 
-    /* Map memory */
-    if (!map_memory()) {
-        return 0;
-    }
-
-    /* Set up fake Thread Information Block (TIB) at address 0.
-     * The original code accesses fs:[0] for SEH chain management.
-     * The lifter translates fs:[0] as MEM32(0).
-     * We put a valid TIB structure at the start of mapped memory. */
-    MEM32(0x0000) = 0xFFFFFFFF;  /* fs:[0] = SEH chain head (end of list) */
-    MEM32(0x0004) = STACK_BASE_VA;  /* fs:[4] = Stack base (top) */
-    MEM32(0x0008) = STACK_BASE_VA - STACK_SIZE;  /* fs:[8] = Stack limit (bottom) */
-
-    /* Initialize stack pointer */
-    esp = STACK_BASE_VA - 16;  /* Leave a little headroom */
-
-    /* Clear registers */
-    eax = ebx = ecx = edx = 0;
-    esi = edi = ebp = 0;
-    eflags = 0;
-    fpu_top = 0;
-    memset(fpu_stack, 0, sizeof(fpu_stack));
-
-    /* Clear ICALL trace */
-    memset(icall_trace, 0, sizeof(icall_trace));
-    icall_trace_idx = 0;
-
-    /* Install crash handler */
 #ifdef _WIN32
+    g_tib_view = VirtualAlloc(NULL, GTA_TIB_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (!g_tib_view) { fprintf(stderr, "FATAL: TIB alloc failed (%lu)\n", GetLastError()); return 0; }
+
+    g_stack_view = VirtualAlloc(NULL, GTA_STACK_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (!g_stack_view) { fprintf(stderr, "FATAL: stack alloc failed (%lu)\n", GetLastError()); return 0; }
+
+    g_scratch_view = VirtualAlloc(NULL, GTA_SCRATCH_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (!g_scratch_view) { fprintf(stderr, "FATAL: scratch alloc failed (%lu)\n", GetLastError()); return 0; }
+
     AddVectoredExceptionHandler(1, crash_handler);
+#else
+    fprintf(stderr, "FATAL: fixed-base mapping needs Win32\n");
+    return 0;
 #endif
 
-    fprintf(stderr, "Runtime initialized. ESP = 0x%08X\n", esp);
+    g_fs_base      = (uint32_t)(uintptr_t)g_tib_view;
+    g_stack_base   = (uint32_t)(uintptr_t)g_stack_view;
+    g_scratch_base = g_scratch_next = (uint32_t)(uintptr_t)g_scratch_view;
+
+    g_esp = g_stack_base + GTA_STACK_SIZE - 64;
+
+    /* Simulated TIB: the CRT's SEH prologue reads and writes fs:[0]. */
+    MEM32(g_fs_base + 0x00) = 0xFFFFFFFFu;                     /* ExceptionList (end) */
+    MEM32(g_fs_base + 0x04) = g_stack_base + GTA_STACK_SIZE; /* StackBase   */
+    MEM32(g_fs_base + 0x08) = g_stack_base;                  /* StackLimit  */
+    MEM32(g_fs_base + 0x18) = g_fs_base;                       /* Self        */
+
+    g_eax = g_ebx = g_ecx = g_edx = g_esi = g_edi = 0;
+    g_fp_top = 0;
+    memset(g_st, 0, sizeof(g_st));
+    memset(g_icall_trace, 0, sizeof(g_icall_trace));
+
+    fprintf(stderr, "  tib 0x%08X  stack 0x%08X..0x%08X (esp=0x%08X)  scratch 0x%08X\n",
+            g_fs_base, g_stack_base, g_stack_base + GTA_STACK_SIZE, g_esp, g_scratch_base);
+    return 1;
+}
+
+int load_original_data(const char *exe_path) {
+    uint32_t span = recomp_load_image(exe_path, GTA_IMAGE_BASE);
+    if (!span) {
+        fprintf(stderr, "FATAL: could not map %s at 0x%08X -- link this host exe at a high base\n",
+                exe_path, GTA_IMAGE_BASE);
+        extern void premap_report(void);
+        premap_report();
+        return 0;
+    }
+    g_image_span = span;
+    fprintf(stderr, "  image 0x%08X..0x%08X from %s\n",
+            GTA_IMAGE_BASE, GTA_IMAGE_BASE + span, exe_path);
     return 1;
 }
 
 void recomp_shutdown(void) {
 #ifdef _WIN32
-    if (g_heap_alloc)  VirtualFree(g_heap_alloc, 0, MEM_RELEASE);
-    if (g_stack_alloc)  VirtualFree(g_stack_alloc, 0, MEM_RELEASE);
-    if (g_image_alloc)  VirtualFree(g_image_alloc, 0, MEM_RELEASE);
-#else
-    free(g_mem_base);
+    if (g_scratch_view) VirtualFree(g_scratch_view, 0, MEM_RELEASE);
+    if (g_stack_view)   VirtualFree(g_stack_view, 0, MEM_RELEASE);
+    if (g_tib_view)     VirtualFree(g_tib_view, 0, MEM_RELEASE);
 #endif
-    g_mem_base = NULL;
-    fprintf(stderr, "Runtime shutdown.\n");
 }

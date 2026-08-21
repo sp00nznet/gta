@@ -21,6 +21,8 @@ add_executable(gta1
     # Engine core
     src/engine/main.c
     src/engine/recomp_runtime.c
+    src/engine/image_loader.c
+    src/engine/hybrid.c
     src/engine/iat_bridge.c
     src/engine/premap.c
 
@@ -30,12 +32,6 @@ add_executable(gta1
 
     # Generated recompiled code
     ${GTA1_RECOMP_SOURCES}
-
-    # Generated stubs for undiscovered functions
-    src/recomp/gen/recomp_stubs.c
-
-    # Import stubs (TODO: fix @ character in MSS function names)
-    # src/recomp/gen/import_stubs.c
 )
 
 target_include_directories(gta1 PRIVATE
@@ -66,7 +62,8 @@ endif()
 if(MSVC)
     target_link_options(gta1 PRIVATE
         /DYNAMICBASE:NO       # No ASLR (need fixed addresses for VA translation)
-        /STACK:8388608        # 8MB stack
+        /STACK:1048576        # host stack: the game runs on the simulated stack.
+                              # 8MB reserved AT 0x400000, right on the image base.
         /LARGEADDRESSAWARE:NO # Stay in 32-bit address space
         /BASE:0x10000000      # Move our exe out of the way so we can map at 0x400000
         /HEAP:4096,4096       # Tiny heap to prevent CRT from reserving 0x400000 range

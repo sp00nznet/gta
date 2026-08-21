@@ -90,7 +90,8 @@ def generate_recomp_files(functions, iat_map, output_dir, split_size=1000, func_
     """Generate recompiled C source files."""
     os.makedirs(output_dir, exist_ok=True)
 
-    lifter = Lifter(iat_map=iat_map, func_names=func_names or {})
+    lifter = Lifter(iat_map=iat_map, func_names=func_names or {},
+                    lifted=set(functions.keys()))
 
     sorted_funcs = sorted(functions.values(), key=lambda f: f.address)
     total = len(sorted_funcs)
@@ -111,6 +112,7 @@ def generate_recomp_files(functions, iat_map, output_dir, split_size=1000, func_
             f.write(f"/* Address range: 0x{chunk[0].address:08X} - 0x{chunk[-1].address:08X} */\n\n")
             f.write(f'#define RECOMP_GENERATED_CODE\n')
             f.write(f'#include "recomp_types.h"\n')
+            f.write(f'#include "recomp_funcs.h"\n')
             f.write(f'#include <math.h>\n')
             f.write(f'#include <string.h>\n\n')
 

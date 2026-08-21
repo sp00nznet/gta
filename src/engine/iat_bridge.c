@@ -9,6 +9,16 @@
  *   Use custom bridges that call our shim implementations.
  */
 
+/* windows.h first: winnt.h contains inline asm ("mov eax, ...") that the
+ * RECOMP_GENERATED_CODE register aliases below would rewrite. */
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
+#define RECOMP_GENERATED_CODE
 #include "recomp_runtime.h"
 #include <stdio.h>
 #include <string.h>
@@ -44,7 +54,7 @@ static int num_bridges = 0;
  * RECOMP_ICALL. There is NO return address pushed (the call is
  * handled by our C dispatch). So args start at esp+0.
  */
-#define ARG(n) MEM32(esp + 4 * ((n) - 1))
+#define ARG(n) MEM32(esp + 4 * (n))
 
 static void register_bridge(u32 iat_va, const char *name, void (*handler)(void)) {
     if (num_bridges >= MAX_BRIDGES) return;
@@ -58,16 +68,15 @@ static void register_bridge(u32 iat_va, const char *name, void (*handler)(void))
 
 static int g_bridge_verbose = 1;
 
-int iat_bridge_try_dispatch(u32 target_va) {
+recomp_func_t iat_bridge_lookup(u32 target_va) {
     if (target_va >= BRIDGE_BASE && target_va < BRIDGE_BASE + (u32)num_bridges) {
         u32 idx = target_va - BRIDGE_BASE;
         if (g_bridge_verbose) {
             fprintf(stderr, "  BRIDGE: %s (esp=0x%08X)\n", bridges[idx].name, esp);
         }
-        bridges[idx].handler();
-        return 1;
+        return bridges[idx].handler;
     }
-    return 0;
+    return NULL;
 }
 
 /*
@@ -115,70 +124,79 @@ static void generic_win32_bridge(void) {
         case 6: eax = (u32)func_name(a1,a2,a3,a4,a5,a6); break; \
         case 7: eax = (u32)func_name(a1,a2,a3,a4,a5,a6,a7); break; \
         } \
-        esp += nargs * 4; \
+        esp += 4 + nargs * 4; \
     }
 
 /* For functions that take string pointers, we need to translate VAs */
-#define VA2PTR(va) ((void *)(g_mem_base + (u32)(va)))
-#define VA2STR(va) ((const char *)(g_mem_base + (u32)(va)))
+#define VA2PTR(va) ((void *)(uintptr_t)ADDR(va))
+#define VA2STR(va) ((const char *)(uintptr_t)ADDR(va))
 
 /* ===== KERNEL32 bridges ===== */
-static void bridge_GetVersion(void) { eax = (u32)GetVersion(); }
-static void bridge_GetLastError(void) { eax = (u32)GetLastError(); fprintf(stderr, "    GetLastError -> %u (0x%X)\n", eax, eax); }
-static void bridge_SetLastError(void) { SetLastError(ARG(1)); esp += 4; }
-static void bridge_GetTickCount(void) { eax = GetTickCount(); }
-static void bridge_Sleep(void) { Sleep(ARG(1)); esp += 4; }
+static void bridge_GetVersion(void) { eax = (u32)GetVersion();  esp += 4; }
+static void bridge_GetLastError(void) { eax = (u32)GetLastError(); fprintf(stderr, "    GetLastError -> %u (0x%X)\n", eax, eax);  esp += 4; }
+static void bridge_SetLastError(void) { SetLastError(ARG(1)); esp += 4+4; }
+static void bridge_GetTickCount(void) { eax = GetTickCount();  esp += 4; }
+static void bridge_Sleep(void) { Sleep(ARG(1)); esp += 4+4; }
 static void bridge_ExitProcess(void) { fprintf(stderr, "ExitProcess(%u)\n", ARG(1)); exit(ARG(1)); }
-static void bridge_GetModuleHandleA(void) { eax = (u32)(uintptr_t)GetModuleHandleA(ARG(1) ? VA2STR(ARG(1)) : NULL); esp += 4; }
+static void bridge_GetModuleHandleA(void) { eax = (u32)(uintptr_t)GetModuleHandleA(ARG(1) ? VA2STR(ARG(1)) : NULL); esp += 4+4; }
 static void bridge_GetCommandLineA(void) {
-    static u32 cl_va = 0x780000;
-    char *cl = GetCommandLineA();
-    strncpy((char*)VA2PTR(cl_va), cl, 255);
+    static u32 cl_va = 0;  /* scratch VA: 0x780000 was inside the game's .data */
+    if (!cl_va) cl_va = recomp_scratch_str(GetCommandLineA());
     eax = cl_va;
-    /* 0 args - no stack cleanup */
+    esp += 4;
 }
-static void bridge_GetStartupInfoA(void) { GetStartupInfoA((STARTUPINFOA*)VA2PTR(ARG(1))); esp += 4; }
-static void bridge_GetVersionExA(void) { eax = GetVersionExA((OSVERSIONINFOA*)VA2PTR(ARG(1))); esp += 4; }
+static void bridge_GetStartupInfoA(void) { GetStartupInfoA((STARTUPINFOA*)VA2PTR(ARG(1))); esp += 4+4; }
+static void bridge_GetVersionExA(void) { eax = GetVersionExA((OSVERSIONINFOA*)VA2PTR(ARG(1))); esp += 4+4; }
 static void bridge_CreateMutexA(void) {
     const char *name = ARG(3) ? VA2STR(ARG(3)) : NULL;
     fprintf(stderr, "    CreateMutexA(sec=%u, own=%u, name='%s')\n", ARG(1), ARG(2), name?name:"(null)");
     eax = (u32)(uintptr_t)CreateMutexA(ARG(1)?VA2PTR(ARG(1)):NULL, ARG(2), name);
     fprintf(stderr, "    -> handle=0x%X, GetLastError=%lu\n", eax, GetLastError());
-    esp += 12;
+    esp += 4+12;
 }
-static void bridge_ReleaseMutex(void) { fprintf(stderr, "    ReleaseMutex(0x%X)\n", ARG(1)); eax = ReleaseMutex((HANDLE)(uintptr_t)ARG(1)); esp += 4; }
-static void bridge_LoadLibraryA(void) { eax = (u32)(uintptr_t)LoadLibraryA(VA2STR(ARG(1))); esp += 4; }
-static void bridge_GetProcAddress(void) { eax = (u32)(uintptr_t)GetProcAddress((HMODULE)(uintptr_t)ARG(1), VA2STR(ARG(2))); esp += 8; }
-static void bridge_VirtualAlloc(void) { eax = (u32)(uintptr_t)VirtualAlloc((void*)(uintptr_t)ARG(1), ARG(2), ARG(3), ARG(4)); esp += 16; }
-static void bridge_VirtualFree(void) { eax = VirtualFree((void*)(uintptr_t)ARG(1), ARG(2), ARG(3)); esp += 12; }
-static void bridge_HeapCreate(void) { eax = (u32)(uintptr_t)HeapCreate(ARG(1), ARG(2), ARG(3)); esp += 12; }
-static void bridge_HeapDestroy(void) { eax = HeapDestroy((HANDLE)(uintptr_t)ARG(1)); esp += 4; }
-static void bridge_HeapAlloc(void) { eax = (u32)(uintptr_t)HeapAlloc((HANDLE)(uintptr_t)ARG(1), ARG(2), ARG(3)); esp += 12; }
-static void bridge_HeapFree(void) { eax = HeapFree((HANDLE)(uintptr_t)ARG(1), ARG(2), (void*)(uintptr_t)ARG(3)); esp += 12; }
-static void bridge_HeapReAlloc(void) { eax = (u32)(uintptr_t)HeapReAlloc((HANDLE)(uintptr_t)ARG(1), ARG(2), (void*)(uintptr_t)ARG(3), ARG(4)); esp += 16; }
-static void bridge_CreateFileA(void) { eax = (u32)(uintptr_t)CreateFileA(VA2STR(ARG(1)), ARG(2), ARG(3), ARG(4)?VA2PTR(ARG(4)):NULL, ARG(5), ARG(6), (HANDLE)(uintptr_t)ARG(7)); esp += 28; }
-static void bridge_ReadFile(void) { eax = ReadFile((HANDLE)(uintptr_t)ARG(1), VA2PTR(ARG(2)), ARG(3), (LPDWORD)VA2PTR(ARG(4)), ARG(5)?VA2PTR(ARG(5)):NULL); esp += 20; }
-static void bridge_WriteFile(void) { eax = WriteFile((HANDLE)(uintptr_t)ARG(1), VA2PTR(ARG(2)), ARG(3), (LPDWORD)VA2PTR(ARG(4)), ARG(5)?VA2PTR(ARG(5)):NULL); esp += 20; }
-static void bridge_CloseHandle(void) { eax = CloseHandle((HANDLE)(uintptr_t)ARG(1)); esp += 4; }
-static void bridge_SetFilePointer(void) { eax = SetFilePointer((HANDLE)(uintptr_t)ARG(1), ARG(2), ARG(3)?VA2PTR(ARG(3)):NULL, ARG(4)); esp += 16; }
-static void bridge_GetModuleFileNameA(void) { eax = GetModuleFileNameA((HMODULE)(uintptr_t)ARG(1), (char*)VA2PTR(ARG(2)), ARG(3)); esp += 12; }
-static void bridge_FindFirstFileA(void) { eax = (u32)(uintptr_t)FindFirstFileA(VA2STR(ARG(1)), (WIN32_FIND_DATAA*)VA2PTR(ARG(2))); esp += 8; }
-static void bridge_FindNextFileA(void) { eax = FindNextFileA((HANDLE)(uintptr_t)ARG(1), (WIN32_FIND_DATAA*)VA2PTR(ARG(2))); esp += 8; }
-static void bridge_FindClose(void) { eax = FindClose((HANDLE)(uintptr_t)ARG(1)); esp += 4; }
-static void bridge_GetSystemDirectoryA(void) { eax = GetSystemDirectoryA((char*)VA2PTR(ARG(1)), ARG(2)); esp += 8; }
-static void bridge_GetLocalTime(void) { GetLocalTime((SYSTEMTIME*)VA2PTR(ARG(1))); esp += 4; }
-static void bridge_GetCurrentProcess(void) { eax = (u32)(uintptr_t)GetCurrentProcess(); }
-static void bridge_IsBadWritePtr(void) { eax = IsBadWritePtr(VA2PTR(ARG(1)), ARG(2)); esp += 8; }
-static void bridge_IsBadReadPtr(void) { eax = IsBadReadPtr(VA2PTR(ARG(1)), ARG(2)); esp += 8; }
-static void bridge_GetStdHandle(void) { eax = (u32)(uintptr_t)GetStdHandle(ARG(1)); esp += 4; }
-static void bridge_TerminateProcess(void) { TerminateProcess((HANDLE)(uintptr_t)ARG(1), ARG(2)); esp += 8; }
-static void bridge_GetEnvironmentVariableA(void) { eax = GetEnvironmentVariableA(VA2STR(ARG(1)), (char*)VA2PTR(ARG(2)), ARG(3)); esp += 12; }
-static void bridge_SetEnvironmentVariableA(void) { eax = SetEnvironmentVariableA(VA2STR(ARG(1)), ARG(2)?VA2STR(ARG(2)):NULL); esp += 8; }
-static void bridge_GetACP(void) { eax = GetACP(); }
-static void bridge_GetOEMCP(void) { eax = GetOEMCP(); }
-static void bridge_GetCPInfo(void) { eax = GetCPInfo(ARG(1), (CPINFO*)VA2PTR(ARG(2))); esp += 8; }
-static void bridge_MultiByteToWideChar(void) { eax = MultiByteToWideChar(ARG(1),ARG(2),VA2STR(ARG(3)),(int)ARG(4),(LPWSTR)VA2PTR(ARG(5)),(int)ARG(6)); esp+=24; }
-static void bridge_WideCharToMultiByte(void) { eax = WideCharToMultiByte(ARG(1),ARG(2),(LPCWSTR)VA2PTR(ARG(3)),(int)ARG(4),(LPSTR)VA2PTR(ARG(5)),(int)ARG(6),ARG(7)?VA2STR(ARG(7)):NULL,NULL); esp+=32; }
+static void bridge_ReleaseMutex(void) { fprintf(stderr, "    ReleaseMutex(0x%X)\n", ARG(1)); eax = ReleaseMutex((HANDLE)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_LoadLibraryA(void) {
+    const char *dll = VA2STR(ARG(1));
+    eax = (u32)(uintptr_t)LoadLibraryA(dll);
+    fprintf(stderr, "    LoadLibraryA('%s') -> 0x%X\n", dll, eax);
+    esp += 4+4;
+}
+static void bridge_GetProcAddress(void) {
+    const char *name = VA2STR(ARG(2));
+    eax = (u32)(uintptr_t)GetProcAddress((HMODULE)(uintptr_t)ARG(1), name);
+    fprintf(stderr, "    GetProcAddress(0x%X, '%s') -> 0x%X\n", ARG(1), name, eax);
+    esp += 4+8;
+}
+static void bridge_VirtualAlloc(void) { eax = (u32)(uintptr_t)VirtualAlloc((void*)(uintptr_t)ARG(1), ARG(2), ARG(3), ARG(4)); esp += 4+16; }
+static void bridge_VirtualFree(void) { eax = VirtualFree((void*)(uintptr_t)ARG(1), ARG(2), ARG(3)); esp += 4+12; }
+static void bridge_HeapCreate(void) { eax = (u32)(uintptr_t)HeapCreate(ARG(1), ARG(2), ARG(3)); esp += 4+12; }
+static void bridge_HeapDestroy(void) { eax = HeapDestroy((HANDLE)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_HeapAlloc(void) { eax = (u32)(uintptr_t)HeapAlloc((HANDLE)(uintptr_t)ARG(1), ARG(2), ARG(3)); esp += 4+12; }
+static void bridge_HeapFree(void) { eax = HeapFree((HANDLE)(uintptr_t)ARG(1), ARG(2), (void*)(uintptr_t)ARG(3)); esp += 4+12; }
+static void bridge_HeapReAlloc(void) { eax = (u32)(uintptr_t)HeapReAlloc((HANDLE)(uintptr_t)ARG(1), ARG(2), (void*)(uintptr_t)ARG(3), ARG(4)); esp += 4+16; }
+static void bridge_CreateFileA(void) { eax = (u32)(uintptr_t)CreateFileA(VA2STR(ARG(1)), ARG(2), ARG(3), ARG(4)?VA2PTR(ARG(4)):NULL, ARG(5), ARG(6), (HANDLE)(uintptr_t)ARG(7)); esp += 4+28; }
+static void bridge_ReadFile(void) { eax = ReadFile((HANDLE)(uintptr_t)ARG(1), VA2PTR(ARG(2)), ARG(3), (LPDWORD)VA2PTR(ARG(4)), ARG(5)?VA2PTR(ARG(5)):NULL); esp += 4+20; }
+static void bridge_WriteFile(void) { eax = WriteFile((HANDLE)(uintptr_t)ARG(1), VA2PTR(ARG(2)), ARG(3), (LPDWORD)VA2PTR(ARG(4)), ARG(5)?VA2PTR(ARG(5)):NULL); esp += 4+20; }
+static void bridge_CloseHandle(void) { eax = CloseHandle((HANDLE)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_SetFilePointer(void) { eax = SetFilePointer((HANDLE)(uintptr_t)ARG(1), ARG(2), ARG(3)?VA2PTR(ARG(3)):NULL, ARG(4)); esp += 4+16; }
+static void bridge_GetModuleFileNameA(void) { eax = GetModuleFileNameA((HMODULE)(uintptr_t)ARG(1), (char*)VA2PTR(ARG(2)), ARG(3)); esp += 4+12; }
+static void bridge_FindFirstFileA(void) { eax = (u32)(uintptr_t)FindFirstFileA(VA2STR(ARG(1)), (WIN32_FIND_DATAA*)VA2PTR(ARG(2))); esp += 4+8; }
+static void bridge_FindNextFileA(void) { eax = FindNextFileA((HANDLE)(uintptr_t)ARG(1), (WIN32_FIND_DATAA*)VA2PTR(ARG(2))); esp += 4+8; }
+static void bridge_FindClose(void) { eax = FindClose((HANDLE)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_GetSystemDirectoryA(void) { eax = GetSystemDirectoryA((char*)VA2PTR(ARG(1)), ARG(2)); esp += 4+8; }
+static void bridge_GetLocalTime(void) { GetLocalTime((SYSTEMTIME*)VA2PTR(ARG(1))); esp += 4+4; }
+static void bridge_GetCurrentProcess(void) { eax = (u32)(uintptr_t)GetCurrentProcess();  esp += 4; }
+static void bridge_IsBadWritePtr(void) { eax = IsBadWritePtr(VA2PTR(ARG(1)), ARG(2)); esp += 4+8; }
+static void bridge_IsBadReadPtr(void) { eax = IsBadReadPtr(VA2PTR(ARG(1)), ARG(2)); esp += 4+8; }
+static void bridge_GetStdHandle(void) { eax = (u32)(uintptr_t)GetStdHandle(ARG(1)); esp += 4+4; }
+static void bridge_TerminateProcess(void) { TerminateProcess((HANDLE)(uintptr_t)ARG(1), ARG(2)); esp += 4+8; }
+static void bridge_GetEnvironmentVariableA(void) { eax = GetEnvironmentVariableA(VA2STR(ARG(1)), (char*)VA2PTR(ARG(2)), ARG(3)); esp += 4+12; }
+static void bridge_SetEnvironmentVariableA(void) { eax = SetEnvironmentVariableA(VA2STR(ARG(1)), ARG(2)?VA2STR(ARG(2)):NULL); esp += 4+8; }
+static void bridge_GetACP(void) { eax = GetACP();  esp += 4; }
+static void bridge_GetOEMCP(void) { eax = GetOEMCP();  esp += 4; }
+static void bridge_GetCPInfo(void) { eax = GetCPInfo(ARG(1), (CPINFO*)VA2PTR(ARG(2))); esp += 4+8; }
+static void bridge_MultiByteToWideChar(void) { eax = MultiByteToWideChar(ARG(1),ARG(2),VA2STR(ARG(3)),(int)ARG(4),(LPWSTR)VA2PTR(ARG(5)),(int)ARG(6)); esp += 4+24; }
+static void bridge_WideCharToMultiByte(void) { eax = WideCharToMultiByte(ARG(1),ARG(2),(LPCWSTR)VA2PTR(ARG(3)),(int)ARG(4),(LPSTR)VA2PTR(ARG(5)),(int)ARG(6),ARG(7)?VA2STR(ARG(7)):NULL,NULL); esp += 4+32; }
 static void bridge_FlushFileBuffers(void) { eax = FlushFileBuffers((HANDLE)(uintptr_t)ARG(1)); esp += 4+4; }
 static void bridge_SetHandleCount(void) { eax = ARG(1); esp += 4+4; } /* noop on NT */
 static void bridge_GetFileType(void) { eax = GetFileType((HANDLE)(uintptr_t)ARG(1)); esp += 4+4; }
@@ -187,19 +205,19 @@ static void bridge_SetEndOfFile(void) { eax = SetEndOfFile((HANDLE)(uintptr_t)AR
 static void bridge_SetUnhandledExceptionFilter(void) { eax = (u32)(uintptr_t)SetUnhandledExceptionFilter(NULL); esp += 4+4; }
 static void bridge_UnhandledExceptionFilter(void) { eax = EXCEPTION_EXECUTE_HANDLER; esp += 4+4; }
 static void bridge_RtlUnwind(void) { /* stub - SEH unwinding, not supported */ esp += 4+16; }
-static void bridge_LCMapStringA(void) { eax = LCMapStringA(ARG(1),ARG(2),VA2STR(ARG(3)),(int)ARG(4),(LPSTR)VA2PTR(ARG(5)),(int)ARG(6)); esp+=24; }
-static void bridge_LCMapStringW(void) { eax = LCMapStringW(ARG(1),ARG(2),(LPCWSTR)VA2PTR(ARG(3)),(int)ARG(4),(LPWSTR)VA2PTR(ARG(5)),(int)ARG(6)); esp+=24; }
-static void bridge_CompareStringA(void) { eax = CompareStringA(ARG(1),ARG(2),VA2STR(ARG(3)),(int)ARG(4),VA2STR(ARG(5)),(int)ARG(6)); esp+=24; }
-static void bridge_CompareStringW(void) { eax = CompareStringW(ARG(1),ARG(2),(LPCWSTR)VA2PTR(ARG(3)),(int)ARG(4),(LPCWSTR)VA2PTR(ARG(5)),(int)ARG(6)); esp+=24; }
-static void bridge_GetStringTypeA(void) { eax = GetStringTypeA(ARG(1),ARG(2),VA2STR(ARG(3)),(int)ARG(4),(LPWORD)VA2PTR(ARG(5))); esp+=20; }
-static void bridge_GetStringTypeW(void) { eax = GetStringTypeW(ARG(1),(LPCWSTR)VA2PTR(ARG(2)),(int)ARG(3),(LPWORD)VA2PTR(ARG(4))); esp+=16; }
+static void bridge_LCMapStringA(void) { eax = LCMapStringA(ARG(1),ARG(2),VA2STR(ARG(3)),(int)ARG(4),(LPSTR)VA2PTR(ARG(5)),(int)ARG(6)); esp += 4+24; }
+static void bridge_LCMapStringW(void) { eax = LCMapStringW(ARG(1),ARG(2),(LPCWSTR)VA2PTR(ARG(3)),(int)ARG(4),(LPWSTR)VA2PTR(ARG(5)),(int)ARG(6)); esp += 4+24; }
+static void bridge_CompareStringA(void) { eax = CompareStringA(ARG(1),ARG(2),VA2STR(ARG(3)),(int)ARG(4),VA2STR(ARG(5)),(int)ARG(6)); esp += 4+24; }
+static void bridge_CompareStringW(void) { eax = CompareStringW(ARG(1),ARG(2),(LPCWSTR)VA2PTR(ARG(3)),(int)ARG(4),(LPCWSTR)VA2PTR(ARG(5)),(int)ARG(6)); esp += 4+24; }
+static void bridge_GetStringTypeA(void) { eax = GetStringTypeA(ARG(1),ARG(2),VA2STR(ARG(3)),(int)ARG(4),(LPWORD)VA2PTR(ARG(5))); esp += 4+20; }
+static void bridge_GetStringTypeW(void) { eax = GetStringTypeW(ARG(1),(LPCWSTR)VA2PTR(ARG(2)),(int)ARG(3),(LPWORD)VA2PTR(ARG(4))); esp += 4+16; }
 static void bridge_FreeEnvironmentStringsA(void) { eax = 1; esp += 4+4; }
 static void bridge_FreeEnvironmentStringsW(void) { eax = 1; esp += 4+4; }
-static void bridge_GetEnvironmentStrings(void) { eax = 0; }
-static void bridge_GetEnvironmentStringsW(void) { eax = 0; }
-static void bridge_GetTimeZoneInformation(void) { eax = GetTimeZoneInformation((TIME_ZONE_INFORMATION*)VA2PTR(ARG(1))); esp+=4; }
-static void bridge_GetSystemTime(void) { GetSystemTime((SYSTEMTIME*)VA2PTR(ARG(1))); esp+=4; }
-static void bridge_GetSystemTimeAsFileTime(void) { GetSystemTimeAsFileTime((FILETIME*)VA2PTR(ARG(1))); esp+=4; }
+static void bridge_GetEnvironmentStrings(void) { eax = 0;  esp += 4; }
+static void bridge_GetEnvironmentStringsW(void) { eax = 0;  esp += 4; }
+static void bridge_GetTimeZoneInformation(void) { eax = GetTimeZoneInformation((TIME_ZONE_INFORMATION*)VA2PTR(ARG(1))); esp += 4+4; }
+static void bridge_GetSystemTime(void) { GetSystemTime((SYSTEMTIME*)VA2PTR(ARG(1))); esp += 4+4; }
+static void bridge_GetSystemTimeAsFileTime(void) { GetSystemTimeAsFileTime((FILETIME*)VA2PTR(ARG(1))); esp += 4+4; }
 static void bridge_IsBadCodePtr(void) { eax = 0; esp += 4+4; } /* always valid */
 
 /* ===== USER32 bridges ===== */
@@ -218,7 +236,79 @@ static void bridge_DispatchMessageA(void) { eax = (u32)DispatchMessageA((MSG*)VA
 static void bridge_PostQuitMessage(void) { PostQuitMessage((int)ARG(1)); esp += 4+4; }
 static void bridge_GetAsyncKeyState(void) { eax = (u32)(u16)GetAsyncKeyState((int)ARG(1)); esp += 4+4; }
 static void bridge_GetKeyState(void) { eax = (u32)(u16)GetKeyState((int)ARG(1)); esp += 4+4; }
-static void bridge_RegisterClassA(void) { eax = RegisterClassA((WNDCLASSA*)VA2PTR(ARG(1))); esp += 4+4; }
+/* ===== real -> lifted: window procedures =====
+ *
+ * RegisterClassA gets lpfnWndProc as an address in the ORIGINAL image. Handing
+ * that to Windows means Windows executes the original 1997 machine code, whose
+ * IAT slots we have overwritten with bridge cookies -- it dies on its first
+ * import. Every callback the OS owns has to enter through a host thunk that
+ * marshals onto the simulated stack and dispatches the lifted function.
+ *
+ * esp is saved and restored around the call: a window proc can run reentrantly
+ * (SendMessage from inside a message handler), and a single global save slot
+ * would hand the outer call the inner call's stack pointer.
+ */
+#define MAX_WNDPROCS 4
+static u32 g_wndproc_va[MAX_WNDPROCS];
+static int g_wndproc_count;
+
+static LRESULT call_lifted_wndproc(int slot, HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    recomp_func_t fn = recomp_lookup(g_wndproc_va[slot]);
+    u32 saved_esp = esp;
+    u32 result;
+
+    if (!fn) {
+        fprintf(stderr, "  WNDPROC: 0x%08X not lifted, deferring to DefWindowProc\n",
+                g_wndproc_va[slot]);
+        return DefWindowProcA(hwnd, msg, wp, lp);
+    }
+
+    PUSH32(esp, (u32)lp);
+    PUSH32(esp, (u32)wp);
+    PUSH32(esp, (u32)msg);
+    PUSH32(esp, (u32)(uintptr_t)hwnd);
+    PUSH32(esp, RECOMP_RETADDR);
+    fn();
+    result = eax;
+    esp = saved_esp;
+    return (LRESULT)result;
+}
+
+#define WNDPROC_THUNK(n) \
+    static LRESULT CALLBACK lifted_wndproc_##n(HWND h, UINT m, WPARAM w, LPARAM l) { \
+        return call_lifted_wndproc(n, h, m, w, l); \
+    }
+WNDPROC_THUNK(0)
+WNDPROC_THUNK(1)
+WNDPROC_THUNK(2)
+WNDPROC_THUNK(3)
+static const WNDPROC g_wndproc_thunks[MAX_WNDPROCS] = {
+    lifted_wndproc_0, lifted_wndproc_1, lifted_wndproc_2, lifted_wndproc_3
+};
+
+/* Swap the game's window proc for a thunk, reusing the slot if this VA is
+ * already routed (classes get re-registered after a display mode change). */
+static WNDPROC route_wndproc(u32 va) {
+    for (int i = 0; i < g_wndproc_count; i++)
+        if (g_wndproc_va[i] == va) return g_wndproc_thunks[i];
+    if (g_wndproc_count >= MAX_WNDPROCS) {
+        fprintf(stderr, "  WNDPROC: out of thunks, 0x%08X unrouted\n", va);
+        return NULL;
+    }
+    g_wndproc_va[g_wndproc_count] = va;
+    fprintf(stderr, "  WNDPROC: routed 0x%08X -> lifted (slot %d)\n", va, g_wndproc_count);
+    return g_wndproc_thunks[g_wndproc_count++];
+}
+
+static void bridge_RegisterClassA(void) {
+    WNDCLASSA *wc = (WNDCLASSA *)VA2PTR(ARG(1));
+    WNDPROC original = wc->lpfnWndProc;
+    WNDPROC thunk = route_wndproc((u32)(uintptr_t)original);
+    if (thunk) wc->lpfnWndProc = thunk;
+    eax = RegisterClassA(wc);
+    wc->lpfnWndProc = original;  /* leave the game's struct as it found it */
+    esp += 4+4;
+}
 static void bridge_SetTimer(void) { eax = (u32)(uintptr_t)SetTimer((HWND)(uintptr_t)ARG(1), ARG(2), ARG(3), (TIMERPROC)(uintptr_t)ARG(4)); esp += 4+16; }
 static void bridge_KillTimer(void) { eax = KillTimer((HWND)(uintptr_t)ARG(1), ARG(2)); esp += 4+8; }
 static void bridge_GetClientRect(void) { eax = GetClientRect((HWND)(uintptr_t)ARG(1), (RECT*)VA2PTR(ARG(2))); esp += 4+8; }
@@ -231,90 +321,90 @@ static void bridge_LoadStringA(void) { eax = LoadStringA((HINSTANCE)(uintptr_t)A
 static void bridge_EnableWindow(void) { eax = EnableWindow((HWND)(uintptr_t)ARG(1), (BOOL)ARG(2)); esp += 4+8; }
 static void bridge_SetActiveWindow(void) { eax = (u32)(uintptr_t)SetActiveWindow((HWND)(uintptr_t)ARG(1)); esp += 4+4; }
 static void bridge_SetForegroundWindow(void) { eax = SetForegroundWindow((HWND)(uintptr_t)ARG(1)); esp += 4+4; }
-static void bridge_GetActiveWindow(void) { eax = (u32)(uintptr_t)GetActiveWindow(); }
+static void bridge_GetActiveWindow(void) { eax = (u32)(uintptr_t)GetActiveWindow();  esp += 4; }
 static void bridge_GetWindowPlacement(void) { eax = GetWindowPlacement((HWND)(uintptr_t)ARG(1),(WINDOWPLACEMENT*)VA2PTR(ARG(2))); esp += 4+8; }
 static void bridge_SetWindowPos(void) { eax = SetWindowPos((HWND)(uintptr_t)ARG(1),(HWND)(uintptr_t)ARG(2),(int)ARG(3),(int)ARG(4),(int)ARG(5),(int)ARG(6),ARG(7)); esp += 4+28; }
 static void bridge_GetCursorPos(void) { eax = GetCursorPos((POINT*)VA2PTR(ARG(1))); esp += 4+4; }
 static void bridge_SetCursorPos(void) { eax = SetCursorPos((int)ARG(1),(int)ARG(2)); esp += 4+8; }
 
 /* ===== GDI32 bridges ===== */
-static void bridge_GetDeviceCaps(void) { eax = GetDeviceCaps((HDC)(uintptr_t)ARG(1),(int)ARG(2)); esp+=8; }
-static void bridge_CreateCompatibleDC(void) { eax = (u32)(uintptr_t)CreateCompatibleDC((HDC)(uintptr_t)ARG(1)); esp+=4; }
-static void bridge_DeleteDC(void) { eax = DeleteDC((HDC)(uintptr_t)ARG(1)); esp+=4; }
-static void bridge_SelectObject(void) { eax = (u32)(uintptr_t)SelectObject((HDC)(uintptr_t)ARG(1),(HGDIOBJ)(uintptr_t)ARG(2)); esp+=8; }
-static void bridge_DeleteObject(void) { eax = DeleteObject((HGDIOBJ)(uintptr_t)ARG(1)); esp+=4; }
-static void bridge_CreatePalette(void) { eax = (u32)(uintptr_t)CreatePalette((LOGPALETTE*)VA2PTR(ARG(1))); esp+=4; }
-static void bridge_SelectPalette(void) { eax = (u32)(uintptr_t)SelectPalette((HDC)(uintptr_t)ARG(1),(HPALETTE)(uintptr_t)ARG(2),(BOOL)ARG(3)); esp+=12; }
-static void bridge_RealizePalette(void) { eax = RealizePalette((HDC)(uintptr_t)ARG(1)); esp+=4; }
-static void bridge_BitBlt(void) { eax = BitBlt((HDC)(uintptr_t)ARG(1),(int)ARG(2),(int)ARG(3),(int)ARG(4),(int)ARG(5),(HDC)(uintptr_t)ARG(6),(int)ARG(7),(int)MEM32(esp+32),(DWORD)MEM32(esp+36)); esp+=36; }
-static void bridge_CreateCompatibleBitmap(void) { eax = (u32)(uintptr_t)CreateCompatibleBitmap((HDC)(uintptr_t)ARG(1),(int)ARG(2),(int)ARG(3)); esp+=12; }
-static void bridge_GetStockObject(void) { eax = (u32)(uintptr_t)GetStockObject((int)ARG(1)); esp+=4; }
+static void bridge_GetDeviceCaps(void) { eax = GetDeviceCaps((HDC)(uintptr_t)ARG(1),(int)ARG(2)); esp += 4+8; }
+static void bridge_CreateCompatibleDC(void) { eax = (u32)(uintptr_t)CreateCompatibleDC((HDC)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_DeleteDC(void) { eax = DeleteDC((HDC)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_SelectObject(void) { eax = (u32)(uintptr_t)SelectObject((HDC)(uintptr_t)ARG(1),(HGDIOBJ)(uintptr_t)ARG(2)); esp += 4+8; }
+static void bridge_DeleteObject(void) { eax = DeleteObject((HGDIOBJ)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_CreatePalette(void) { eax = (u32)(uintptr_t)CreatePalette((LOGPALETTE*)VA2PTR(ARG(1))); esp += 4+4; }
+static void bridge_SelectPalette(void) { eax = (u32)(uintptr_t)SelectPalette((HDC)(uintptr_t)ARG(1),(HPALETTE)(uintptr_t)ARG(2),(BOOL)ARG(3)); esp += 4+12; }
+static void bridge_RealizePalette(void) { eax = RealizePalette((HDC)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_BitBlt(void) { eax = BitBlt((HDC)(uintptr_t)ARG(1),(int)ARG(2),(int)ARG(3),(int)ARG(4),(int)ARG(5),(HDC)(uintptr_t)ARG(6),(int)ARG(7),(int)MEM32(esp+32),(DWORD)MEM32(esp+36)); esp += 4+36; }
+static void bridge_CreateCompatibleBitmap(void) { eax = (u32)(uintptr_t)CreateCompatibleBitmap((HDC)(uintptr_t)ARG(1),(int)ARG(2),(int)ARG(3)); esp += 4+12; }
+static void bridge_GetStockObject(void) { eax = (u32)(uintptr_t)GetStockObject((int)ARG(1)); esp += 4+4; }
 /* Remaining GDI stubs */
 static void bridge_gdi_stub(void) { eax = 0; esp += 4+4; }
 
 /* ===== ADVAPI32 bridges ===== */
-static void bridge_RegOpenKeyExA(void) { eax = RegOpenKeyExA((HKEY)(uintptr_t)ARG(1),VA2STR(ARG(2)),ARG(3),ARG(4),(PHKEY)VA2PTR(ARG(5))); esp+=20; }
-static void bridge_RegQueryValueExA(void) { eax = RegQueryValueExA((HKEY)(uintptr_t)ARG(1),VA2STR(ARG(2)),NULL,ARG(4)?VA2PTR(ARG(4)):NULL,ARG(5)?VA2PTR(ARG(5)):NULL,ARG(6)?VA2PTR(ARG(6)):NULL); esp+=24; }
-static void bridge_RegSetValueExA(void) { eax = RegSetValueExA((HKEY)(uintptr_t)ARG(1),VA2STR(ARG(2)),0,ARG(4),VA2PTR(ARG(5)),ARG(6)); esp+=24; }
-static void bridge_RegCloseKey(void) { eax = RegCloseKey((HKEY)(uintptr_t)ARG(1)); esp+=4; }
+static void bridge_RegOpenKeyExA(void) { eax = RegOpenKeyExA((HKEY)(uintptr_t)ARG(1),VA2STR(ARG(2)),ARG(3),ARG(4),(PHKEY)VA2PTR(ARG(5))); esp += 4+20; }
+static void bridge_RegQueryValueExA(void) { eax = RegQueryValueExA((HKEY)(uintptr_t)ARG(1),VA2STR(ARG(2)),NULL,ARG(4)?VA2PTR(ARG(4)):NULL,ARG(5)?VA2PTR(ARG(5)):NULL,ARG(6)?VA2PTR(ARG(6)):NULL); esp += 4+24; }
+static void bridge_RegSetValueExA(void) { eax = RegSetValueExA((HKEY)(uintptr_t)ARG(1),VA2STR(ARG(2)),0,ARG(4),VA2PTR(ARG(5)),ARG(6)); esp += 4+24; }
+static void bridge_RegCloseKey(void) { eax = RegCloseKey((HKEY)(uintptr_t)ARG(1)); esp += 4+4; }
 
 /* ===== WINMM bridges ===== */
-static void bridge_joyGetPosEx(void) { eax = joyGetPosEx(ARG(1),(JOYINFOEX*)VA2PTR(ARG(2))); esp+=8; }
-static void bridge_joyGetDevCapsA(void) { eax = joyGetDevCapsA(ARG(1),(JOYCAPSA*)VA2PTR(ARG(2)),ARG(3)); esp+=12; }
+static void bridge_joyGetPosEx(void) { eax = joyGetPosEx(ARG(1),(JOYINFOEX*)VA2PTR(ARG(2))); esp += 4+8; }
+static void bridge_joyGetDevCapsA(void) { eax = joyGetDevCapsA(ARG(1),(JOYCAPSA*)VA2PTR(ARG(2)),ARG(3)); esp += 4+12; }
 
 /* ===== MSS bridges ===== */
-static void bridge_AIL_startup(void) { eax = AIL_startup(); esp+=4; }
-static void bridge_AIL_shutdown(void) { AIL_shutdown(); esp+=4; }
-static void bridge_AIL_ms_count(void) { eax = AIL_ms_count(); esp+=4; }
-static void bridge_AIL_set_digital_master_volume(void) { AIL_set_digital_master_volume((HDIGDRIVER)(uintptr_t)ARG(1),(s32)ARG(2)); esp+=8; }
-static void bridge_AIL_allocate_sample_handle(void) { eax=(u32)(uintptr_t)AIL_allocate_sample_handle((HDIGDRIVER)(uintptr_t)ARG(1)); esp+=4; }
-static void bridge_AIL_release_sample_handle(void) { AIL_release_sample_handle((HSAMPLE)(uintptr_t)ARG(1)); esp+=4; }
-static void bridge_AIL_init_sample(void) { AIL_init_sample((HSAMPLE)(uintptr_t)ARG(1)); esp+=4; }
-static void bridge_AIL_start_sample(void) { AIL_start_sample((HSAMPLE)(uintptr_t)ARG(1)); esp+=4; }
-static void bridge_AIL_end_sample(void) { AIL_end_sample((HSAMPLE)(uintptr_t)ARG(1)); esp+=4; }
-static void bridge_AIL_sample_status(void) { eax=AIL_sample_status((HSAMPLE)(uintptr_t)ARG(1)); esp+=4; }
-static void bridge_AIL_set_sample_volume(void) { AIL_set_sample_volume((HSAMPLE)(uintptr_t)ARG(1),(s32)ARG(2)); esp+=8; }
-static void bridge_AIL_set_sample_pan(void) { AIL_set_sample_pan((HSAMPLE)(uintptr_t)ARG(1),(s32)ARG(2)); esp+=8; }
-static void bridge_AIL_set_sample_playback_rate(void) { AIL_set_sample_playback_rate((HSAMPLE)(uintptr_t)ARG(1),(s32)ARG(2)); esp+=8; }
-static void bridge_AIL_set_sample_loop_count(void) { AIL_set_sample_loop_count((HSAMPLE)(uintptr_t)ARG(1),(s32)ARG(2)); esp+=8; }
-static void bridge_AIL_set_sample_address(void) { AIL_set_sample_address((HSAMPLE)(uintptr_t)ARG(1),VA2PTR(ARG(2)),ARG(3)); esp+=12; }
-static void bridge_AIL_set_sample_type(void) { esp+=12; }
-static void bridge_AIL_open_stream(void) { eax=(u32)(uintptr_t)AIL_open_stream((HDIGDRIVER)(uintptr_t)ARG(1),VA2STR(ARG(2)),(s32)ARG(3)); esp+=12; }
-static void bridge_AIL_close_stream(void) { AIL_close_stream((HSTREAM)(uintptr_t)ARG(1)); esp+=4; }
-static void bridge_AIL_start_stream(void) { AIL_start_stream((HSTREAM)(uintptr_t)ARG(1)); esp+=4; }
-static void bridge_AIL_pause_stream(void) { AIL_pause_stream((HSTREAM)(uintptr_t)ARG(1),(s32)ARG(2)); esp+=8; }
-static void bridge_AIL_stream_status(void) { eax=AIL_stream_status((HSTREAM)(uintptr_t)ARG(1)); esp+=4; }
-static void bridge_AIL_stream_position(void) { eax=AIL_stream_position((HSTREAM)(uintptr_t)ARG(1)); esp+=4; }
-static void bridge_AIL_set_stream_volume(void) { AIL_set_stream_volume((HSTREAM)(uintptr_t)ARG(1),(s32)ARG(2)); esp+=8; }
-static void bridge_AIL_set_stream_loop_count(void) { AIL_set_stream_loop_count((HSTREAM)(uintptr_t)ARG(1),(s32)ARG(2)); esp+=8; }
-static void bridge_AIL_stream_info(void) { AIL_stream_info((HSTREAM)(uintptr_t)ARG(1),ARG(2)?VA2PTR(ARG(2)):NULL,ARG(3)?VA2PTR(ARG(3)):NULL,ARG(4)?VA2PTR(ARG(4)):NULL,ARG(5)?VA2PTR(ARG(5)):NULL); esp+=20; }
-static void bridge_AIL_mem_alloc_lock(void) { void*p=AIL_mem_alloc_lock(ARG(1)); eax=p?(u32)((u8*)p-g_mem_base):0; esp+=4; }
-static void bridge_AIL_mem_free_lock(void) { AIL_mem_free_lock(VA2PTR(ARG(1))); esp+=4; }
-static void bridge_AIL_waveOutOpen(void) { eax=AIL_waveOutOpen(VA2PTR(ARG(1)),(void*)(uintptr_t)ARG(2),(s32)ARG(3),ARG(4)?VA2PTR(ARG(4)):NULL); esp+=16; }
-static void bridge_AIL_waveOutClose(void) { esp+=4; }
-static void bridge_AIL_digital_configuration(void) { eax=0; esp+=16; }
-static void bridge_AIL_register_timer(void) { eax=(u32)(uintptr_t)AIL_register_timer(NULL); esp+=4; }
-static void bridge_AIL_release_timer_handle(void) { AIL_release_timer_handle((HTIMER)(uintptr_t)ARG(1)); esp+=4; }
-static void bridge_AIL_set_timer_frequency(void) { esp+=8; }
-static void bridge_AIL_start_timer(void) { AIL_start_timer((HTIMER)(uintptr_t)ARG(1)); esp+=4; }
-static void bridge_AIL_stop_timer(void) { AIL_stop_timer((HTIMER)(uintptr_t)ARG(1)); esp+=4; }
-static void bridge_AIL_set_preference(void) { esp+=8; }
-static void bridge_AIL_set_stream_position(void) { esp+=8; }
-static void bridge_AIL_service_stream(void) { esp+=8; }
+static void bridge_AIL_startup(void) { eax = AIL_startup(); esp += 4+4; }
+static void bridge_AIL_shutdown(void) { AIL_shutdown(); esp += 4+4; }
+static void bridge_AIL_ms_count(void) { eax = AIL_ms_count(); esp += 4+4; }
+static void bridge_AIL_set_digital_master_volume(void) { AIL_set_digital_master_volume((HDIGDRIVER)(uintptr_t)ARG(1),(s32)ARG(2)); esp += 4+8; }
+static void bridge_AIL_allocate_sample_handle(void) { eax=(u32)(uintptr_t)AIL_allocate_sample_handle((HDIGDRIVER)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_AIL_release_sample_handle(void) { AIL_release_sample_handle((HSAMPLE)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_AIL_init_sample(void) { AIL_init_sample((HSAMPLE)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_AIL_start_sample(void) { AIL_start_sample((HSAMPLE)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_AIL_end_sample(void) { AIL_end_sample((HSAMPLE)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_AIL_sample_status(void) { eax=AIL_sample_status((HSAMPLE)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_AIL_set_sample_volume(void) { AIL_set_sample_volume((HSAMPLE)(uintptr_t)ARG(1),(s32)ARG(2)); esp += 4+8; }
+static void bridge_AIL_set_sample_pan(void) { AIL_set_sample_pan((HSAMPLE)(uintptr_t)ARG(1),(s32)ARG(2)); esp += 4+8; }
+static void bridge_AIL_set_sample_playback_rate(void) { AIL_set_sample_playback_rate((HSAMPLE)(uintptr_t)ARG(1),(s32)ARG(2)); esp += 4+8; }
+static void bridge_AIL_set_sample_loop_count(void) { AIL_set_sample_loop_count((HSAMPLE)(uintptr_t)ARG(1),(s32)ARG(2)); esp += 4+8; }
+static void bridge_AIL_set_sample_address(void) { AIL_set_sample_address((HSAMPLE)(uintptr_t)ARG(1),VA2PTR(ARG(2)),ARG(3)); esp += 4+12; }
+static void bridge_AIL_set_sample_type(void) { esp += 4+12; }
+static void bridge_AIL_open_stream(void) { eax=(u32)(uintptr_t)AIL_open_stream((HDIGDRIVER)(uintptr_t)ARG(1),VA2STR(ARG(2)),(s32)ARG(3)); esp += 4+12; }
+static void bridge_AIL_close_stream(void) { AIL_close_stream((HSTREAM)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_AIL_start_stream(void) { AIL_start_stream((HSTREAM)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_AIL_pause_stream(void) { AIL_pause_stream((HSTREAM)(uintptr_t)ARG(1),(s32)ARG(2)); esp += 4+8; }
+static void bridge_AIL_stream_status(void) { eax=AIL_stream_status((HSTREAM)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_AIL_stream_position(void) { eax=AIL_stream_position((HSTREAM)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_AIL_set_stream_volume(void) { AIL_set_stream_volume((HSTREAM)(uintptr_t)ARG(1),(s32)ARG(2)); esp += 4+8; }
+static void bridge_AIL_set_stream_loop_count(void) { AIL_set_stream_loop_count((HSTREAM)(uintptr_t)ARG(1),(s32)ARG(2)); esp += 4+8; }
+static void bridge_AIL_stream_info(void) { AIL_stream_info((HSTREAM)(uintptr_t)ARG(1),ARG(2)?VA2PTR(ARG(2)):NULL,ARG(3)?VA2PTR(ARG(3)):NULL,ARG(4)?VA2PTR(ARG(4)):NULL,ARG(5)?VA2PTR(ARG(5)):NULL); esp += 4+20; }
+static void bridge_AIL_mem_alloc_lock(void) { void*p=AIL_mem_alloc_lock(ARG(1)); eax=p?(u32)((uintptr_t)p - g_mem_base):0; esp += 4+4; }
+static void bridge_AIL_mem_free_lock(void) { AIL_mem_free_lock(VA2PTR(ARG(1))); esp += 4+4; }
+static void bridge_AIL_waveOutOpen(void) { eax=AIL_waveOutOpen(VA2PTR(ARG(1)),(void*)(uintptr_t)ARG(2),(s32)ARG(3),ARG(4)?VA2PTR(ARG(4)):NULL); esp += 4+16; }
+static void bridge_AIL_waveOutClose(void) { esp += 4+4; }
+static void bridge_AIL_digital_configuration(void) { eax=0; esp += 4+16; }
+static void bridge_AIL_register_timer(void) { eax=(u32)(uintptr_t)AIL_register_timer(NULL); esp += 4+4; }
+static void bridge_AIL_release_timer_handle(void) { AIL_release_timer_handle((HTIMER)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_AIL_set_timer_frequency(void) { esp += 4+8; }
+static void bridge_AIL_start_timer(void) { AIL_start_timer((HTIMER)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_AIL_stop_timer(void) { AIL_stop_timer((HTIMER)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_AIL_set_preference(void) { esp += 4+8; }
+static void bridge_AIL_set_stream_position(void) { esp += 4+8; }
+static void bridge_AIL_service_stream(void) { esp += 4+8; }
 
 /* ===== Smacker bridges ===== */
-static void bridge_SmackOpen(void) { eax=(u32)(uintptr_t)SmackOpen(VA2STR(ARG(1)),ARG(2),ARG(3)); esp+=12; }
-static void bridge_SmackClose(void) { SmackClose((HSMACK)(uintptr_t)ARG(1)); esp+=4; }
-static void bridge_SmackDoFrame(void) { eax=SmackDoFrame((HSMACK)(uintptr_t)ARG(1)); esp+=4; }
-static void bridge_SmackNextFrame(void) { eax=SmackNextFrame((HSMACK)(uintptr_t)ARG(1)); esp+=4; }
-static void bridge_SmackWait(void) { eax=SmackWait((HSMACK)(uintptr_t)ARG(1)); esp+=4; }
-static void bridge_SmackToBuffer(void) { esp+=28; }
-static void bridge_SmackSoundUseDirectSound(void) { esp+=4; }
-static void bridge_SmackBufferOpen(void) { eax=1; esp+=24; }
+static void bridge_SmackOpen(void) { eax=(u32)(uintptr_t)SmackOpen(VA2STR(ARG(1)),ARG(2),ARG(3)); esp += 4+12; }
+static void bridge_SmackClose(void) { SmackClose((HSMACK)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_SmackDoFrame(void) { eax=SmackDoFrame((HSMACK)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_SmackNextFrame(void) { eax=SmackNextFrame((HSMACK)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_SmackWait(void) { eax=SmackWait((HSMACK)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_SmackToBuffer(void) { esp += 4+28; }
+static void bridge_SmackSoundUseDirectSound(void) { esp += 4+4; }
+static void bridge_SmackBufferOpen(void) { eax=1; esp += 4+24; }
 
 /* ===== DPLAYX bridges ===== */
-static void bridge_dplay_stub1(void) { eax=0x80004005; esp+=4; }
-static void bridge_dplay_stub2(void) { eax=0x80004005; esp+=4; }
+static void bridge_dplay_stub1(void) { eax=0x80004005; esp += 4+4; }
+static void bridge_dplay_stub2(void) { eax=0x80004005; esp += 4+4; }
 
 #endif /* _WIN32 */
 
