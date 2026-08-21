@@ -33,7 +33,7 @@
 
 /* ===== global register model (contract: recomp_types.h) ===== */
 uint32_t g_eax, g_ecx, g_edx, g_esp;
-uint32_t g_ebx, g_esi, g_edi;
+uint32_t g_ebx, g_esi, g_edi, g_ebp;
 double   g_st[8];
 int      g_fp_top;
 uint16_t g_fpu_cw = 0x037F;
@@ -51,9 +51,24 @@ uint32_t g_cur_func;
 #ifdef RECOMP_TRACE
 uint32_t g_enter_trace[RECOMP_ENTER_SIZE];
 uint32_t g_enter_idx;
+/*
+ * GTA's fatal error path: sub_00422900 is FatalError(msgId, line, ...), called
+ * from ~190 sites, and it takes the game straight to shutdown. Reporting its
+ * arguments on entry names the exact failing call site -- the second argument
+ * is the __LINE__ of whichever source file raised it. Nothing else tells us
+ * why the game quit: the message never reaches a dialog here.
+ */
+#define GTA_FATAL_ERROR_VA 0x00422900u
+
 void recomp_trace_enter(uint32_t va) {
     g_enter_trace[g_enter_idx & (RECOMP_ENTER_SIZE - 1)] = va;
     g_enter_idx++;
+
+    if (va == GTA_FATAL_ERROR_VA) {
+        fprintf(stderr, "*** FatalError(msg=0x%08X, line=%u, arg3=0x%08X) ***\n",
+                MEM32(g_esp + 4), MEM32(g_esp + 8), MEM32(g_esp + 12));
+        recomp_dump_trace("FatalError");
+    }
 }
 #endif
 
@@ -137,7 +152,7 @@ static void host_call_thunk(void) {
 
     r.eax = g_eax; r.ecx = g_ecx; r.edx = g_edx; r.ebx = g_ebx;
     r.esp = g_esp; r.esi = g_esi; r.edi = g_edi;
-    r.ebp = 0;     /* lifted ebp is per-function; real callees here don't use ours */
+    r.ebp = g_ebp;
 
     hybrid_call_machine(&r, target);
 
@@ -159,7 +174,21 @@ recomp_func_t recomp_lookup_manual(uint32_t va) {
 
 recomp_func_t recomp_lookup_import(uint32_t va) { return iat_bridge_lookup(va); }
 
+/*
+ * GTA's fatal-error handler (sub_00422900, called from ~190 sites) copies its
+ * message out of 0x50F3B8 and then shuts the game down. It never reaches a
+ * message box here, so the reason the game quit is otherwise invisible -- but
+ * the buffer is still sitting in the mapped image at exit.
+ */
+static void dump_game_error(void) {
+    const char *msg  = (const char *)(uintptr_t)ADDR(0x50F3B8u);
+    const char *prev = (const char *)(uintptr_t)ADDR(0x50F4B8u);
+    if (msg[0])  fprintf(stderr, "  game error:    \"%.200s\"\n", msg);
+    if (prev[0]) fprintf(stderr, "  previous error: \"%.200s\"\n", prev);
+}
+
 void recomp_dump_trace(const char *why) {
+    dump_game_error();
     fprintf(stderr, "--- trace (%s): cur_func=0x%08X, %u icalls ---\n",
             why ? why : "?", g_cur_func, g_icall_count);
     for (uint32_t i = 0; i < ICALL_TRACE_SIZE; i++) {
@@ -189,8 +218,33 @@ static LONG WINAPI crash_handler(EXCEPTION_POINTERS *ep) {
 #endif
 
 /* ===== init / shutdown ===== */
+/*
+ * A hang looks exactly like success from the outside: no crash, no output, no
+ * OS calls. Set GTA_WATCHDOG_MS and a thread dumps the trace and bails after
+ * that long, turning "it stopped saying anything" into a function address.
+ */
+static DWORD WINAPI watchdog_thread(LPVOID arg) {
+    Sleep((DWORD)(uintptr_t)arg);
+    fprintf(stderr, "\n*** watchdog: still running, dumping trace ***\n");
+    recomp_dump_trace("watchdog");
+    fflush(stderr);
+    TerminateProcess(GetCurrentProcess(), 2);
+    return 0;
+}
+
+static void start_watchdog(void) {
+    char buf[32];
+    DWORD ms;
+    if (!GetEnvironmentVariableA("GTA_WATCHDOG_MS", buf, sizeof(buf))) return;
+    ms = (DWORD)atoi(buf);
+    if (!ms) return;
+    CreateThread(NULL, 0, watchdog_thread, (LPVOID)(uintptr_t)ms, 0, NULL);
+    fprintf(stderr, "  watchdog armed: %lu ms\n", ms);
+}
+
 int recomp_init(void) {
     fprintf(stderr, "GTA Static Recompilation Runtime\n");
+    start_watchdog();
 
 #ifdef _WIN32
     g_tib_view = VirtualAlloc(NULL, GTA_TIB_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);

@@ -63,6 +63,10 @@
 
 #define SCREEN_W 640
 #define SCREEN_H 480
+/* GTA classifies enumerated modes by ddpfPixelFormat.dwRGBBitCount and only
+ * recognises 16, 24 and 32 (sub_0048D4E0). An 8bpp mode is silently dropped,
+ * which is why its 640x480 search found nothing. 16-bit 565 it is. */
+#define SCREEN_BPP 16
 
 enum { IF_DD, IF_SURFACE, IF_PALETTE, IF_CLIPPER, IF_COUNT };
 
@@ -104,7 +108,7 @@ static HWND g_hwnd;
 static struct {
     u32 obj;            /* VA of the COM object handed to the game */
     u32 bits;           /* VA of its 8bpp pixels */
-    u32 w, h, caps;
+    u32 w, h, caps, bpp;
     int is_primary;
     int paired;         /* the surface this one flips with, or -1 */
 } g_surf[MAX_SURFACES];
@@ -142,7 +146,7 @@ static int surf_index(u32 obj) {
     return -1;
 }
 
-static void write_surface_desc(u32 p, u32 w, u32 h, u32 bits, u32 caps) {
+static void write_surface_desc(u32 p, u32 w, u32 h, u32 bits, u32 caps, u32 bpp) {
     u32 i;
     for (i = 0; i < SD_DESC_SIZE; i += 4) MEM32(p + i) = 0;
     MEM32(p + SD_SIZE)    = SD_DESC_SIZE;
@@ -150,17 +154,31 @@ static void write_surface_desc(u32 p, u32 w, u32 h, u32 bits, u32 caps) {
                             DDSD_PIXELFORMAT | (bits ? DDSD_LPSURFACE : 0u);
     MEM32(p + SD_HEIGHT)  = h;
     MEM32(p + SD_WIDTH)   = w;
-    MEM32(p + SD_PITCH)   = w;          /* 8bpp, no row padding */
+    MEM32(p + SD_PITCH)   = w * (bpp / 8);
     MEM32(p + SD_SURFACE) = bits;
     MEM32(p + SD_CAPS)    = caps;
     MEM32(p + SD_PIXFMT + 0x00) = 0x20;                            /* dwSize */
-    MEM32(p + SD_PIXFMT + 0x04) = DDPF_RGB | DDPF_PALETTEINDEXED8;
-    MEM32(p + SD_PIXFMT + 0x0C) = 8;                               /* dwRGBBitCount */
+    MEM32(p + SD_PIXFMT + 0x04) = (bpp == 8) ? (DDPF_RGB | DDPF_PALETTEINDEXED8)
+                                             : DDPF_RGB;
+    MEM32(p + SD_PIXFMT + 0x0C) = bpp;                             /* dwRGBBitCount */
+    if (bpp == 16) {                                               /* 5-6-5 */
+        MEM32(p + SD_PIXFMT + 0x10) = 0xF800u;                     /* dwRBitMask */
+        MEM32(p + SD_PIXFMT + 0x14) = 0x07E0u;                     /* dwGBitMask */
+        MEM32(p + SD_PIXFMT + 0x18) = 0x001Fu;                     /* dwBBitMask */
+    } else if (bpp == 32) {
+        MEM32(p + SD_PIXFMT + 0x10) = 0x00FF0000u;
+        MEM32(p + SD_PIXFMT + 0x14) = 0x0000FF00u;
+        MEM32(p + SD_PIXFMT + 0x18) = 0x000000FFu;
+    }
 }
 
-/* Put an 8bpp buffer on screen. GDI does the palette lookup. */
+/*
+ * Put the surface on screen. GDI understands both formats directly: a 256-entry
+ * colour table for 8bpp, or BI_BITFIELDS with 5-6-5 masks for 16bpp. Either way
+ * the conversion is the display driver's job, not ours.
+ */
 static void present(int idx) {
-    struct { BITMAPINFOHEADER h; RGBQUAD c[256]; } bmi;
+    struct { BITMAPINFOHEADER h; DWORD c[256]; } bmi;   /* colour table or masks */
     HDC dc;
     RECT rc;
     int i;
@@ -172,13 +190,24 @@ static void present(int idx) {
     bmi.h.biWidth       = (LONG)g_surf[idx].w;
     bmi.h.biHeight      = -(LONG)g_surf[idx].h;   /* top-down */
     bmi.h.biPlanes      = 1;
-    bmi.h.biBitCount    = 8;
-    bmi.h.biCompression = BI_RGB;
-    bmi.h.biClrUsed     = 256;
-    for (i = 0; i < 256; i++) {
-        bmi.c[i].rgbRed   = g_pal[i].peRed;
-        bmi.c[i].rgbGreen = g_pal[i].peGreen;
-        bmi.c[i].rgbBlue  = g_pal[i].peBlue;
+    bmi.h.biBitCount    = (WORD)g_surf[idx].bpp;
+
+    if (g_surf[idx].bpp == 8) {
+        RGBQUAD *pal = (RGBQUAD *)bmi.c;
+        bmi.h.biCompression = BI_RGB;
+        bmi.h.biClrUsed     = 256;
+        for (i = 0; i < 256; i++) {
+            pal[i].rgbRed   = g_pal[i].peRed;
+            pal[i].rgbGreen = g_pal[i].peGreen;
+            pal[i].rgbBlue  = g_pal[i].peBlue;
+        }
+    } else if (g_surf[idx].bpp == 16) {
+        bmi.h.biCompression = BI_BITFIELDS;
+        bmi.c[0] = 0xF800u;   /* red   */
+        bmi.c[1] = 0x07E0u;   /* green */
+        bmi.c[2] = 0x001Fu;   /* blue  */
+    } else {
+        bmi.h.biCompression = BI_RGB;
     }
 
     dc = GetDC(g_hwnd);
@@ -215,7 +244,8 @@ static u32 create_surface(u32 desc_va) {
     if (g_surf_count >= MAX_SURFACES) return 0;
     i = g_surf_count++;
     g_surf[i].obj        = make_object(IF_SURFACE);
-    g_surf[i].bits       = recomp_scratch_alloc(w * h);
+    g_surf[i].bpp        = SCREEN_BPP;
+    g_surf[i].bits       = recomp_scratch_alloc(w * h * (SCREEN_BPP / 8));
     g_surf[i].w          = w;
     g_surf[i].h          = h;
     g_surf[i].caps       = caps;
@@ -230,7 +260,8 @@ static u32 create_surface(u32 desc_va) {
     if (back && g_surf_count < MAX_SURFACES) {
         int b = g_surf_count++;
         g_surf[b].obj        = make_object(IF_SURFACE);
-        g_surf[b].bits       = recomp_scratch_alloc(w * h);
+        g_surf[b].bpp        = SCREEN_BPP;
+        g_surf[b].bits       = recomp_scratch_alloc(w * h * (SCREEN_BPP / 8));
         g_surf[b].w          = w;
         g_surf[b].h          = h;
         g_surf[b].caps       = DDSCAPS_BACKBUFFER;
@@ -254,12 +285,12 @@ static void enum_display_modes(u32 ctx, u32 callback) {
 
     for (i = 0; i < n; i++) {
         u32 args[2];
-        write_surface_desc(desc, modes[i].w, modes[i].h, 0, 0);
+        write_surface_desc(desc, modes[i].w, modes[i].h, 0, 0, SCREEN_BPP);
         args[0] = desc;
         args[1] = ctx;
         if (call_game(callback, args, 2) != DDENUMRET_OK) break;
     }
-    fprintf(stderr, "  DDRAW: EnumDisplayModes offered %d 8bpp modes\n", i);
+    fprintf(stderr, "  DDRAW: EnumDisplayModes offered %d %u-bit modes\n", i, SCREEN_BPP);
 }
 
 /* One handler behind every vtable slot; g_bridge_hit says which. */
@@ -340,14 +371,14 @@ static void shim_dispatch(void) {
         case 22: /* GetSurfaceDesc(lpDDSurfaceDesc) */
             if (si >= 0)
                 write_surface_desc(ARG(2), g_surf[si].w, g_surf[si].h,
-                                   g_surf[si].bits, g_surf[si].caps);
+                                   g_surf[si].bits, g_surf[si].caps, g_surf[si].bpp);
             break;
         case 24: /* IsLost -- never */
             break;
         case 25: /* Lock(lpDestRect, lpDDSurfaceDesc, dwFlags, hEvent) */
             if (si >= 0)
                 write_surface_desc(ARG(3), g_surf[si].w, g_surf[si].h,
-                                   g_surf[si].bits, g_surf[si].caps);
+                                   g_surf[si].bits, g_surf[si].caps, g_surf[si].bpp);
             else
                 ret = DDERR_UNSUPPORTED;
             break;

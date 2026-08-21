@@ -90,6 +90,14 @@ def generate_recomp_files(functions, iat_map, output_dir, split_size=1000, func_
     """Generate recompiled C source files."""
     os.makedirs(output_dir, exist_ok=True)
 
+    # Clear previous output first. A run producing fewer files than the last one
+    # leaves stale recomp_*.c behind, and the CMake glob happily compiles them
+    # alongside the new ones -- duplicate definitions of functions that no
+    # longer exist.
+    import glob as _glob
+    for stale in _glob.glob(os.path.join(output_dir, 'recomp_[0-9]*.c')):
+        os.remove(stale)
+
     lifter = Lifter(iat_map=iat_map, func_names=func_names or {},
                     lifted=set(functions.keys()))
 
