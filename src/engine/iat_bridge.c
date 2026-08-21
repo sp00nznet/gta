@@ -32,12 +32,16 @@
 #pragma comment(lib, "winmm.lib")
 #endif
 
+/* src/video/ddraw_shim.c -- we stand in for ddraw.dll entirely */
+void ddraw_shim_init(void);
+u32  ddraw_shim_getproc(const char *name);
+
 #include "../sound/miles_shim.h"
 #include "../video/smacker_shim.h"
 
 /* ===== Bridge address allocation ===== */
 #define BRIDGE_BASE 0xB0000000u
-#define MAX_BRIDGES 256
+#define MAX_BRIDGES 512
 
 typedef struct {
     u32 iat_va;
@@ -48,22 +52,31 @@ typedef struct {
 static bridge_entry_t bridges[MAX_BRIDGES];
 static int num_bridges = 0;
 
-/*
- * Stack argument access.
- * The recompiled code pushes args in right-to-left order then does
- * RECOMP_ICALL. There is NO return address pushed (the call is
- * handled by our C dispatch). So args start at esp+0.
- */
-#define ARG(n) MEM32(esp + 4 * (n))
+/* Which bridge the dispatcher just resolved. The DirectDraw shim points many
+ * vtable slots at ONE handler and reads this to tell them apart, instead of
+ * carrying dozens of near-identical thunks. */
+u32 g_bridge_hit;
 
-static void register_bridge(u32 iat_va, const char *name, void (*handler)(void)) {
-    if (num_bridges >= MAX_BRIDGES) return;
-    u32 bridge_addr = BRIDGE_BASE + num_bridges;
-    bridges[num_bridges].iat_va = iat_va;
+
+/* A callable address the lifted dispatcher resolves to `handler`, with no IAT
+ * slot behind it -- for pointers we hand the game ourselves (GetProcAddress
+ * results, COM vtable slots). */
+u32 recomp_alloc_bridge(const char *name, void (*handler)(void)) {
+    if (num_bridges >= MAX_BRIDGES) {
+        fprintf(stderr, "  BRIDGE: table full, '%s' unbridged\n", name);
+        return 0;
+    }
+    bridges[num_bridges].iat_va = 0;
     bridges[num_bridges].name = name;
     bridges[num_bridges].handler = handler;
+    return BRIDGE_BASE + num_bridges++;
+}
+
+static void register_bridge(u32 iat_va, const char *name, void (*handler)(void)) {
+    u32 bridge_addr = recomp_alloc_bridge(name, handler);
+    if (!bridge_addr) return;
+    bridges[bridge_addr - BRIDGE_BASE].iat_va = iat_va;
     MEM32(iat_va) = bridge_addr;
-    num_bridges++;
 }
 
 static int g_bridge_verbose = 1;
@@ -71,6 +84,7 @@ static int g_bridge_verbose = 1;
 recomp_func_t iat_bridge_lookup(u32 target_va) {
     if (target_va >= BRIDGE_BASE && target_va < BRIDGE_BASE + (u32)num_bridges) {
         u32 idx = target_va - BRIDGE_BASE;
+        g_bridge_hit = idx;
         if (g_bridge_verbose) {
             fprintf(stderr, "  BRIDGE: %s (esp=0x%08X)\n", bridges[idx].name, esp);
         }
@@ -137,7 +151,11 @@ static void bridge_GetLastError(void) { eax = (u32)GetLastError(); fprintf(stder
 static void bridge_SetLastError(void) { SetLastError(ARG(1)); esp += 4+4; }
 static void bridge_GetTickCount(void) { eax = GetTickCount();  esp += 4; }
 static void bridge_Sleep(void) { Sleep(ARG(1)); esp += 4+4; }
-static void bridge_ExitProcess(void) { fprintf(stderr, "ExitProcess(%u)\n", ARG(1)); exit(ARG(1)); }
+static void bridge_ExitProcess(void) {
+    fprintf(stderr, "ExitProcess(0x%X)\n", ARG(1));
+    recomp_dump_trace("ExitProcess");
+    exit(ARG(1));
+}
 static void bridge_GetModuleHandleA(void) { eax = (u32)(uintptr_t)GetModuleHandleA(ARG(1) ? VA2STR(ARG(1)) : NULL); esp += 4+4; }
 static void bridge_GetCommandLineA(void) {
     static u32 cl_va = 0;  /* scratch VA: 0x780000 was inside the game's .data */
@@ -163,17 +181,48 @@ static void bridge_LoadLibraryA(void) {
 }
 static void bridge_GetProcAddress(void) {
     const char *name = VA2STR(ARG(2));
-    eax = (u32)(uintptr_t)GetProcAddress((HMODULE)(uintptr_t)ARG(1), name);
+    eax = ddraw_shim_getproc(name);   /* our DirectDraw, not the real one */
+    if (!eax) eax = (u32)(uintptr_t)GetProcAddress((HMODULE)(uintptr_t)ARG(1), name);
     fprintf(stderr, "    GetProcAddress(0x%X, '%s') -> 0x%X\n", ARG(1), name, eax);
     esp += 4+8;
 }
 static void bridge_VirtualAlloc(void) { eax = (u32)(uintptr_t)VirtualAlloc((void*)(uintptr_t)ARG(1), ARG(2), ARG(3), ARG(4)); esp += 4+16; }
 static void bridge_VirtualFree(void) { eax = VirtualFree((void*)(uintptr_t)ARG(1), ARG(2), ARG(3)); esp += 4+12; }
-static void bridge_HeapCreate(void) { eax = (u32)(uintptr_t)HeapCreate(ARG(1), ARG(2), ARG(3)); esp += 4+12; }
-static void bridge_HeapDestroy(void) { eax = HeapDestroy((HANDLE)(uintptr_t)ARG(1)); esp += 4+4; }
-static void bridge_HeapAlloc(void) { eax = (u32)(uintptr_t)HeapAlloc((HANDLE)(uintptr_t)ARG(1), ARG(2), ARG(3)); esp += 4+12; }
-static void bridge_HeapFree(void) { eax = HeapFree((HANDLE)(uintptr_t)ARG(1), ARG(2), (void*)(uintptr_t)ARG(3)); esp += 4+12; }
-static void bridge_HeapReAlloc(void) { eax = (u32)(uintptr_t)HeapReAlloc((HANDLE)(uintptr_t)ARG(1), ARG(2), (void*)(uintptr_t)ARG(3), ARG(4)); esp += 4+16; }
+/*
+ * Entering at WinMain skips the CRT startup, so the game's heap-handle global
+ * is never assigned and it hands us whatever happened to be in .data. Any
+ * handle we did not issue ourselves becomes the process heap -- we own every
+ * Heap* bridge, so alloc and free stay paired.
+ */
+#define MAX_HEAPS 8
+static HANDLE g_heaps[MAX_HEAPS];
+static int    g_heap_count;
+
+static HANDLE heap_of(u32 h) {
+    HANDLE handle = (HANDLE)(uintptr_t)h;
+    int i;
+    for (i = 0; i < g_heap_count; i++)
+        if (g_heaps[i] == handle) return handle;
+    return GetProcessHeap();
+}
+
+static void bridge_HeapCreate(void) {
+    HANDLE h = HeapCreate(ARG(1), ARG(2), ARG(3));
+    if (h && g_heap_count < MAX_HEAPS) g_heaps[g_heap_count++] = h;
+    eax = (u32)(uintptr_t)h;
+    fprintf(stderr, "    HeapCreate(0x%X, %u, %u) -> 0x%X", ARG(1), ARG(2), ARG(3), eax);
+    fputc(10, stderr);
+    esp += 4+12;
+}
+static void bridge_HeapDestroy(void) { eax = HeapDestroy(heap_of(ARG(1))); esp += 4+4; }
+static void bridge_HeapAlloc(void) {
+    eax = (u32)(uintptr_t)HeapAlloc(heap_of(ARG(1)), ARG(2), ARG(3));
+    fprintf(stderr, "    HeapAlloc(h=0x%X, flags=0x%X, %u bytes) -> 0x%X", ARG(1), ARG(2), ARG(3), eax);
+    fputc(10, stderr);
+    esp += 4+12;
+}
+static void bridge_HeapFree(void) { eax = HeapFree(heap_of(ARG(1)), ARG(2), (void*)(uintptr_t)ARG(3)); esp += 4+12; }
+static void bridge_HeapReAlloc(void) { eax = (u32)(uintptr_t)HeapReAlloc(heap_of(ARG(1)), ARG(2), (void*)(uintptr_t)ARG(3), ARG(4)); esp += 4+16; }
 static void bridge_CreateFileA(void) { eax = (u32)(uintptr_t)CreateFileA(VA2STR(ARG(1)), ARG(2), ARG(3), ARG(4)?VA2PTR(ARG(4)):NULL, ARG(5), ARG(6), (HANDLE)(uintptr_t)ARG(7)); esp += 4+28; }
 static void bridge_ReadFile(void) { eax = ReadFile((HANDLE)(uintptr_t)ARG(1), VA2PTR(ARG(2)), ARG(3), (LPDWORD)VA2PTR(ARG(4)), ARG(5)?VA2PTR(ARG(5)):NULL); esp += 4+20; }
 static void bridge_WriteFile(void) { eax = WriteFile((HANDLE)(uintptr_t)ARG(1), VA2PTR(ARG(2)), ARG(3), (LPDWORD)VA2PTR(ARG(4)), ARG(5)?VA2PTR(ARG(5)):NULL); esp += 4+20; }
@@ -213,8 +262,23 @@ static void bridge_GetStringTypeA(void) { eax = GetStringTypeA(ARG(1),ARG(2),VA2
 static void bridge_GetStringTypeW(void) { eax = GetStringTypeW(ARG(1),(LPCWSTR)VA2PTR(ARG(2)),(int)ARG(3),(LPWORD)VA2PTR(ARG(4))); esp += 4+16; }
 static void bridge_FreeEnvironmentStringsA(void) { eax = 1; esp += 4+4; }
 static void bridge_FreeEnvironmentStringsW(void) { eax = 1; esp += 4+4; }
-static void bridge_GetEnvironmentStrings(void) { eax = 0;  esp += 4; }
-static void bridge_GetEnvironmentStringsW(void) { eax = 0;  esp += 4; }
+/*
+ * An empty environment block, not NULL: the CRT's _setenvp walks the returned
+ * pointer looking for the double NUL that terminates it, so NULL is a null
+ * dereference rather than "no variables". The game reads no environment
+ * variables, so empty is enough.
+ */
+static u32 empty_environment(void) {
+    static u32 va;
+    if (!va) {
+        va = recomp_scratch_alloc(4);
+        MEM8(va) = 0;
+        MEM8(va + 1) = 0;
+    }
+    return va;
+}
+static void bridge_GetEnvironmentStrings(void) { eax = empty_environment(); esp += 4; }
+static void bridge_GetEnvironmentStringsW(void) { eax = empty_environment(); esp += 4; }
 static void bridge_GetTimeZoneInformation(void) { eax = GetTimeZoneInformation((TIME_ZONE_INFORMATION*)VA2PTR(ARG(1))); esp += 4+4; }
 static void bridge_GetSystemTime(void) { GetSystemTime((SYSTEMTIME*)VA2PTR(ARG(1))); esp += 4+4; }
 static void bridge_GetSystemTimeAsFileTime(void) { GetSystemTimeAsFileTime((FILETIME*)VA2PTR(ARG(1))); esp += 4+4; }
@@ -596,6 +660,7 @@ void setup_iat_bridges(void) {
     register_bridge(0x4A72AC, "SmackOpen", bridge_SmackOpen);
     register_bridge(0x4A72B0, "SmackBufferOpen", bridge_SmackBufferOpen);
 
+    ddraw_shim_init();
     fprintf(stderr, "  Registered %d IAT bridges (all 166 imports covered)\n", num_bridges);
 #endif
 }

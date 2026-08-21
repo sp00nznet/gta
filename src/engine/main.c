@@ -20,7 +20,7 @@
 #include <string.h>
 
 
-extern void sub_00437230(void);  /* WinMain */
+extern void sub_0049DC30(void);  /* PE entry: CRT startup, which calls WinMain */
 
 /* src/engine/premap.c -- how we get the image range at 0x400000 */
 int  premap_is_child(void);
@@ -40,19 +40,11 @@ int main(int argc, char *argv[]) {
     if (!recomp_init()) return 1;
     setup_iat_bridges();  /* patches IAT slots in the just-loaded image */
 
-    fprintf(stderr, "\n--- WinMain (sub_00437230) ---\n\n");
+    fprintf(stderr, "\n--- entry point (sub_0049DC30) ---\n\n");
 
-    {
-        u32 cmdline_va = recomp_scratch_str(GetCommandLineA());
-        PUSH32(esp, 10);                                            /* nShowCmd */
-        PUSH32(esp, cmdline_va);                                    /* lpCmdLine */
-        PUSH32(esp, 0);                                             /* hPrevInstance */
-        PUSH32(esp, (u32)(uintptr_t)GetModuleHandleA(NULL));        /* hInstance */
-        PUSH32(esp, RECOMP_RETADDR);                                /* return address */
-        sub_00437230();
-    }
+    PUSH32(esp, RECOMP_RETADDR);   /* CRT startup takes no arguments */
+    sub_0049DC30();
 
-    fprintf(stderr, "\n--- WinMain returned (eax=%u) ---\n", eax);
     recomp_dump_trace("exit");
     recomp_shutdown();
     return 0;

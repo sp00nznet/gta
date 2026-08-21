@@ -29,10 +29,18 @@ add_executable(gta1
     # Shim layers
     src/sound/miles_shim.c
     src/video/smacker_shim.c
+    src/video/ddraw_shim.c
 
     # Generated recompiled code
     ${GTA1_RECOMP_SOURCES}
 )
+
+# Record the last 1024 lifted functions entered, dumped on a crash or a
+# stack imbalance. Costs a store and a call per function, so it is opt-in.
+option(GTA_TRACE "Function-entry ring tracer" OFF)
+if(GTA_TRACE)
+    target_compile_definitions(gta1 PRIVATE RECOMP_TRACE=1)
+endif()
 
 target_include_directories(gta1 PRIVATE
     src/

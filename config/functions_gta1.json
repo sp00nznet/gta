@@ -4227,6 +4227,16 @@
     ]
   },
   {
+    "address": "0x00415950",
+    "address_int": 4282704,
+    "name": "sub_00415950",
+    "size": 56,
+    "num_blocks": 6,
+    "num_instructions": 15,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
     "address": "0x004159B0",
     "address_int": 4282800,
     "name": "sub_004159B0",
@@ -4426,6 +4436,22 @@
     "address_int": 4288358,
     "name": "sub_00416F66",
     "size": 341,
+    "num_blocks": 28,
+    "num_instructions": 108,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0040ACD0",
+      "0x004170E0",
+      "0x00417640",
+      "0x004387B0",
+      "0x004544E0"
+    ]
+  },
+  {
+    "address": "0x00416F6E",
+    "address_int": 4288366,
+    "name": "sub_00416F6E",
+    "size": 333,
     "num_blocks": 28,
     "num_instructions": 108,
     "is_thunk": false,
@@ -8629,6 +8655,18 @@
     ]
   },
   {
+    "address": "0x004376A0",
+    "address_int": 4421280,
+    "name": "sub_004376A0",
+    "size": 27,
+    "num_blocks": 3,
+    "num_instructions": 10,
+    "is_thunk": false,
+    "calls_to": [
+      "0x00422900"
+    ]
+  },
+  {
     "address": "0x004376C0",
     "address_int": 4421312,
     "name": "sub_004376C0",
@@ -10028,6 +10066,16 @@
       "0x00481D40",
       "0x0049CB45"
     ]
+  },
+  {
+    "address": "0x00440328",
+    "address_int": 4457256,
+    "name": "sub_00440328",
+    "size": 7,
+    "num_blocks": 1,
+    "num_instructions": 2,
+    "is_thunk": false,
+    "calls_to": []
   },
   {
     "address": "0x00440790",
@@ -12230,6 +12278,21 @@
     "size": 506,
     "num_blocks": 24,
     "num_instructions": 137,
+    "is_thunk": false,
+    "calls_to": [
+      "0x004132C0",
+      "0x00436C30",
+      "0x00436E30",
+      "0x00463C40"
+    ]
+  },
+  {
+    "address": "0x00454E4E",
+    "address_int": 4542030,
+    "name": "sub_00454E4E",
+    "size": 493,
+    "num_blocks": 24,
+    "num_instructions": 132,
     "is_thunk": false,
     "calls_to": [
       "0x004132C0",
@@ -19160,6 +19223,18 @@
     ]
   },
   {
+    "address": "0x0047C050",
+    "address_int": 4702288,
+    "name": "sub_0047C050",
+    "size": 217,
+    "num_blocks": 7,
+    "num_instructions": 73,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0047C130"
+    ]
+  },
+  {
     "address": "0x0047C130",
     "address_int": 4702512,
     "name": "sub_0047C130",
@@ -19564,6 +19639,16 @@
     "calls_to": [
       "0x00422900"
     ]
+  },
+  {
+    "address": "0x0047DC70",
+    "address_int": 4709488,
+    "name": "sub_0047DC70",
+    "size": 14,
+    "num_blocks": 1,
+    "num_instructions": 4,
+    "is_thunk": false,
+    "calls_to": []
   },
   {
     "address": "0x0047DC80",
@@ -21046,6 +21131,18 @@
     ]
   },
   {
+    "address": "0x00486910",
+    "address_int": 4745488,
+    "name": "sub_00486910",
+    "size": 131,
+    "num_blocks": 3,
+    "num_instructions": 46,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0049CD30"
+    ]
+  },
+  {
     "address": "0x004869A0",
     "address_int": 4745632,
     "name": "sub_004869A0",
@@ -21087,6 +21184,18 @@
     "is_thunk": false,
     "calls_to": [
       "0x0049D112"
+    ]
+  },
+  {
+    "address": "0x00486C40",
+    "address_int": 4746304,
+    "name": "sub_00486C40",
+    "size": 116,
+    "num_blocks": 5,
+    "num_instructions": 39,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0049CD30"
     ]
   },
   {
@@ -21156,6 +21265,16 @@
     "size": 163,
     "num_blocks": 18,
     "num_instructions": 55,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x004870B0",
+    "address_int": 4747440,
+    "name": "sub_004870B0",
+    "size": 41,
+    "num_blocks": 1,
+    "num_instructions": 8,
     "is_thunk": false,
     "calls_to": []
   },
@@ -22222,6 +22341,32 @@
     ]
   },
   {
+    "address": "0x0048C6E0",
+    "address_int": 4769504,
+    "name": "sub_0048C6E0",
+    "size": 482,
+    "num_blocks": 41,
+    "num_instructions": 158,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0048C480",
+      "0x0048C640",
+      "0x00490A80"
+    ]
+  },
+  {
+    "address": "0x0048C8D0",
+    "address_int": 4770000,
+    "name": "sub_0048C8D0",
+    "size": 176,
+    "num_blocks": 17,
+    "num_instructions": 67,
+    "is_thunk": false,
+    "calls_to": [
+      "0x00491840"
+    ]
+  },
+  {
     "address": "0x0048C980",
     "address_int": 4770176,
     "name": "sub_0048C980",
@@ -22326,6 +22471,29 @@
     "calls_to": []
   },
   {
+    "address": "0x0048D150",
+    "address_int": 4772176,
+    "name": "sub_0048D150",
+    "size": 313,
+    "num_blocks": 11,
+    "num_instructions": 115,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0048A330",
+      "0x0048A350",
+      "0x0048A370",
+      "0x0048A3C0",
+      "0x0048AD30",
+      "0x0048AD90",
+      "0x0048AE40",
+      "0x0048C2D0",
+      "0x0048C360",
+      "0x00490D00",
+      "0x00490D10",
+      "0x00491840"
+    ]
+  },
+  {
     "address": "0x0048D290",
     "address_int": 4772496,
     "name": "sub_0048D290",
@@ -22358,6 +22526,16 @@
     "size": 38,
     "num_blocks": 3,
     "num_instructions": 15,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x0048D4E0",
+    "address_int": 4773088,
+    "name": "sub_0048D4E0",
+    "size": 135,
+    "num_blocks": 19,
+    "num_instructions": 40,
     "is_thunk": false,
     "calls_to": []
   },
@@ -22631,6 +22809,93 @@
     ]
   },
   {
+    "address": "0x0048E2B0",
+    "address_int": 4776624,
+    "name": "sub_0048E2B0",
+    "size": 114,
+    "num_blocks": 7,
+    "num_instructions": 31,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0048D680",
+      "0x0048F8A0",
+      "0x00491160"
+    ]
+  },
+  {
+    "address": "0x0048E330",
+    "address_int": 4776752,
+    "name": "sub_0048E330",
+    "size": 29,
+    "num_blocks": 1,
+    "num_instructions": 8,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x0048E350",
+    "address_int": 4776784,
+    "name": "sub_0048E350",
+    "size": 72,
+    "num_blocks": 3,
+    "num_instructions": 28,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x0048E3A0",
+    "address_int": 4776864,
+    "name": "sub_0048E3A0",
+    "size": 95,
+    "num_blocks": 6,
+    "num_instructions": 41,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x0048E400",
+    "address_int": 4776960,
+    "name": "sub_0048E400",
+    "size": 247,
+    "num_blocks": 1,
+    "num_instructions": 75,
+    "is_thunk": false,
+    "calls_to": [
+      "0x004940CF"
+    ]
+  },
+  {
+    "address": "0x0048E500",
+    "address_int": 4777216,
+    "name": "sub_0048E500",
+    "size": 315,
+    "num_blocks": 9,
+    "num_instructions": 125,
+    "is_thunk": false,
+    "calls_to": [
+      "0x004949DC",
+      "0x00494A30",
+      "0x00494A60"
+    ]
+  },
+  {
+    "address": "0x0048E640",
+    "address_int": 4777536,
+    "name": "sub_0048E640",
+    "size": 977,
+    "num_blocks": 35,
+    "num_instructions": 347,
+    "is_thunk": false,
+    "calls_to": [
+      "0x004946F7",
+      "0x0049472C",
+      "0x00494765",
+      "0x004947A3",
+      "0x004947DB",
+      "0x00494C10"
+    ]
+  },
+  {
     "address": "0x0048EA20",
     "address_int": 4778528,
     "name": "sub_0048EA20",
@@ -22669,6 +22934,101 @@
     "calls_to": [
       "0x0048D7B0"
     ]
+  },
+  {
+    "address": "0x0048ED50",
+    "address_int": 4779344,
+    "name": "sub_0048ED50",
+    "size": 114,
+    "num_blocks": 7,
+    "num_instructions": 31,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0048D680",
+      "0x0048F8A0",
+      "0x00491160"
+    ]
+  },
+  {
+    "address": "0x0048EDD0",
+    "address_int": 4779472,
+    "name": "sub_0048EDD0",
+    "size": 36,
+    "num_blocks": 1,
+    "num_instructions": 11,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x0048EE00",
+    "address_int": 4779520,
+    "name": "sub_0048EE00",
+    "size": 75,
+    "num_blocks": 3,
+    "num_instructions": 28,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x0048EE50",
+    "address_int": 4779600,
+    "name": "sub_0048EE50",
+    "size": 97,
+    "num_blocks": 6,
+    "num_instructions": 41,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x0048EEC0",
+    "address_int": 4779712,
+    "name": "sub_0048EEC0",
+    "size": 247,
+    "num_blocks": 1,
+    "num_instructions": 75,
+    "is_thunk": false,
+    "calls_to": [
+      "0x00495333"
+    ]
+  },
+  {
+    "address": "0x0048EFC0",
+    "address_int": 4779968,
+    "name": "sub_0048EFC0",
+    "size": 315,
+    "num_blocks": 9,
+    "num_instructions": 123,
+    "is_thunk": false,
+    "calls_to": [
+      "0x004949DC",
+      "0x00494A30",
+      "0x00494A60"
+    ]
+  },
+  {
+    "address": "0x0048F100",
+    "address_int": 4780288,
+    "name": "sub_0048F100",
+    "size": 708,
+    "num_blocks": 24,
+    "num_instructions": 248,
+    "is_thunk": false,
+    "calls_to": [
+      "0x00494C10",
+      "0x004959AF",
+      "0x004959E5",
+      "0x00495A3D"
+    ]
+  },
+  {
+    "address": "0x0048F3D0",
+    "address_int": 4781008,
+    "name": "sub_0048F3D0",
+    "size": 377,
+    "num_blocks": 16,
+    "num_instructions": 111,
+    "is_thunk": false,
+    "calls_to": []
   },
   {
     "address": "0x0048F550",
@@ -22710,6 +23070,20 @@
     ]
   },
   {
+    "address": "0x0048F820",
+    "address_int": 4782112,
+    "name": "sub_0048F820",
+    "size": 114,
+    "num_blocks": 7,
+    "num_instructions": 31,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0048D680",
+      "0x0048F8A0",
+      "0x00491160"
+    ]
+  },
+  {
     "address": "0x0048F8A0",
     "address_int": 4782240,
     "name": "sub_0048F8A0",
@@ -22719,6 +23093,105 @@
     "is_thunk": false,
     "calls_to": [
       "0x0048D920"
+    ]
+  },
+  {
+    "address": "0x0048F8B0",
+    "address_int": 4782256,
+    "name": "sub_0048F8B0",
+    "size": 32,
+    "num_blocks": 1,
+    "num_instructions": 11,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x0048F8D0",
+    "address_int": 4782288,
+    "name": "sub_0048F8D0",
+    "size": 32,
+    "num_blocks": 1,
+    "num_instructions": 11,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x0048F8F0",
+    "address_int": 4782320,
+    "name": "sub_0048F8F0",
+    "size": 34,
+    "num_blocks": 1,
+    "num_instructions": 11,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x0048F920",
+    "address_int": 4782368,
+    "name": "sub_0048F920",
+    "size": 69,
+    "num_blocks": 3,
+    "num_instructions": 28,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x0048F970",
+    "address_int": 4782448,
+    "name": "sub_0048F970",
+    "size": 88,
+    "num_blocks": 6,
+    "num_instructions": 40,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x0048F9D0",
+    "address_int": 4782544,
+    "name": "sub_0048F9D0",
+    "size": 247,
+    "num_blocks": 1,
+    "num_instructions": 75,
+    "is_thunk": false,
+    "calls_to": [
+      "0x00495F52"
+    ]
+  },
+  {
+    "address": "0x0048FAD0",
+    "address_int": 4782800,
+    "name": "sub_0048FAD0",
+    "size": 288,
+    "num_blocks": 19,
+    "num_instructions": 123,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x0048FBF0",
+    "address_int": 4783088,
+    "name": "sub_0048FBF0",
+    "size": 315,
+    "num_blocks": 11,
+    "num_instructions": 121,
+    "is_thunk": false,
+    "calls_to": [
+      "0x004949DC",
+      "0x00494A30",
+      "0x00494A60"
+    ]
+  },
+  {
+    "address": "0x0048FD30",
+    "address_int": 4783408,
+    "name": "sub_0048FD30",
+    "size": 458,
+    "num_blocks": 17,
+    "num_instructions": 147,
+    "is_thunk": false,
+    "calls_to": [
+      "0x00494C10",
+      "0x0049644B"
     ]
   },
   {
@@ -22836,6 +23309,20 @@
     ]
   },
   {
+    "address": "0x00490180",
+    "address_int": 4784512,
+    "name": "sub_00490180",
+    "size": 114,
+    "num_blocks": 7,
+    "num_instructions": 31,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0048D680",
+      "0x00491160",
+      "0x004915C0"
+    ]
+  },
+  {
     "address": "0x00490200",
     "address_int": 4784640,
     "name": "sub_00490200",
@@ -22877,6 +23364,20 @@
     ]
   },
   {
+    "address": "0x00490590",
+    "address_int": 4785552,
+    "name": "sub_00490590",
+    "size": 114,
+    "num_blocks": 7,
+    "num_instructions": 31,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0048D680",
+      "0x00491160",
+      "0x004915C0"
+    ]
+  },
+  {
     "address": "0x00490610",
     "address_int": 4785680,
     "name": "sub_00490610",
@@ -22915,6 +23416,20 @@
       "0x00491130",
       "0x00491DF0",
       "0x004929B0"
+    ]
+  },
+  {
+    "address": "0x004908A0",
+    "address_int": 4786336,
+    "name": "sub_004908A0",
+    "size": 114,
+    "num_blocks": 7,
+    "num_instructions": 31,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0048D680",
+      "0x00491160",
+      "0x004915C0"
     ]
   },
   {
@@ -23267,12 +23782,72 @@
     "calls_to": []
   },
   {
+    "address": "0x004913B0",
+    "address_int": 4789168,
+    "name": "sub_004913B0",
+    "size": 11,
+    "num_blocks": 1,
+    "num_instructions": 3,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x004913C0",
+    "address_int": 4789184,
+    "name": "sub_004913C0",
+    "size": 455,
+    "num_blocks": 5,
+    "num_instructions": 55,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
     "address": "0x004915C0",
     "address_int": 4789696,
     "name": "sub_004915C0",
     "size": 20,
     "num_blocks": 1,
     "num_instructions": 7,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x004915E0",
+    "address_int": 4789728,
+    "name": "sub_004915E0",
+    "size": 15,
+    "num_blocks": 1,
+    "num_instructions": 4,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x004915F0",
+    "address_int": 4789744,
+    "name": "sub_004915F0",
+    "size": 15,
+    "num_blocks": 1,
+    "num_instructions": 4,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x00491600",
+    "address_int": 4789760,
+    "name": "sub_00491600",
+    "size": 277,
+    "num_blocks": 9,
+    "num_instructions": 80,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x00491720",
+    "address_int": 4790048,
+    "name": "sub_00491720",
+    "size": 3,
+    "num_blocks": 1,
+    "num_instructions": 2,
     "is_thunk": false,
     "calls_to": []
   },
@@ -23409,6 +23984,18 @@
     "calls_to": []
   },
   {
+    "address": "0x00491990",
+    "address_int": 4790672,
+    "name": "sub_00491990",
+    "size": 133,
+    "num_blocks": 7,
+    "num_instructions": 50,
+    "is_thunk": false,
+    "calls_to": [
+      "0x00491A20"
+    ]
+  },
+  {
     "address": "0x00491A20",
     "address_int": 4790816,
     "name": "sub_00491A20",
@@ -23451,6 +24038,16 @@
     "calls_to": [
       "0x00491D70"
     ]
+  },
+  {
+    "address": "0x00491D30",
+    "address_int": 4791600,
+    "name": "sub_00491D30",
+    "size": 63,
+    "num_blocks": 4,
+    "num_instructions": 17,
+    "is_thunk": false,
+    "calls_to": []
   },
   {
     "address": "0x00491D70",
@@ -23502,6 +24099,63 @@
     "calls_to": []
   },
   {
+    "address": "0x00492AC0",
+    "address_int": 4795072,
+    "name": "sub_00492AC0",
+    "size": 63,
+    "num_blocks": 5,
+    "num_instructions": 18,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x00492B00",
+    "address_int": 4795136,
+    "name": "sub_00492B00",
+    "size": 262,
+    "num_blocks": 14,
+    "num_instructions": 81,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0048C3F0"
+    ]
+  },
+  {
+    "address": "0x00492C10",
+    "address_int": 4795408,
+    "name": "sub_00492C10",
+    "size": 426,
+    "num_blocks": 25,
+    "num_instructions": 135,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0048A370",
+      "0x0048C3F0"
+    ]
+  },
+  {
+    "address": "0x00492DC0",
+    "address_int": 4795840,
+    "name": "sub_00492DC0",
+    "size": 170,
+    "num_blocks": 7,
+    "num_instructions": 54,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x00492E70",
+    "address_int": 4796016,
+    "name": "sub_00492E70",
+    "size": 66,
+    "num_blocks": 3,
+    "num_instructions": 24,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0048C3F0"
+    ]
+  },
+  {
     "address": "0x00492EC0",
     "address_int": 4796096,
     "name": "sub_00492EC0",
@@ -23526,6 +24180,52 @@
     ]
   },
   {
+    "address": "0x00492F50",
+    "address_int": 4796240,
+    "name": "sub_00492F50",
+    "size": 66,
+    "num_blocks": 3,
+    "num_instructions": 24,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0048C3F0"
+    ]
+  },
+  {
+    "address": "0x00492FA0",
+    "address_int": 4796320,
+    "name": "sub_00492FA0",
+    "size": 6,
+    "num_blocks": 1,
+    "num_instructions": 2,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x00492FB0",
+    "address_int": 4796336,
+    "name": "sub_00492FB0",
+    "size": 133,
+    "num_blocks": 3,
+    "num_instructions": 40,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0048C3F0"
+    ]
+  },
+  {
+    "address": "0x00493040",
+    "address_int": 4796480,
+    "name": "sub_00493040",
+    "size": 187,
+    "num_blocks": 7,
+    "num_instructions": 50,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0048C3F0"
+    ]
+  },
+  {
     "address": "0x00493100",
     "address_int": 4796672,
     "name": "sub_00493100",
@@ -23539,6 +24239,19 @@
     ]
   },
   {
+    "address": "0x00493310",
+    "address_int": 4797200,
+    "name": "sub_00493310",
+    "size": 120,
+    "num_blocks": 9,
+    "num_instructions": 35,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0048D680",
+      "0x0049D612"
+    ]
+  },
+  {
     "address": "0x00493390",
     "address_int": 4797328,
     "name": "sub_00493390",
@@ -23547,6 +24260,60 @@
     "num_instructions": 166,
     "is_thunk": false,
     "calls_to": []
+  },
+  {
+    "address": "0x004935A0",
+    "address_int": 4797856,
+    "name": "sub_004935A0",
+    "size": 149,
+    "num_blocks": 5,
+    "num_instructions": 48,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x00493640",
+    "address_int": 4798016,
+    "name": "sub_00493640",
+    "size": 798,
+    "num_blocks": 29,
+    "num_instructions": 215,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x00493960",
+    "address_int": 4798816,
+    "name": "sub_00493960",
+    "size": 143,
+    "num_blocks": 7,
+    "num_instructions": 62,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x004939F0",
+    "address_int": 4798960,
+    "name": "sub_004939F0",
+    "size": 69,
+    "num_blocks": 1,
+    "num_instructions": 25,
+    "is_thunk": false,
+    "calls_to": [
+      "0x00493A90"
+    ]
+  },
+  {
+    "address": "0x00493A40",
+    "address_int": 4799040,
+    "name": "sub_00493A40",
+    "size": 69,
+    "num_blocks": 1,
+    "num_instructions": 25,
+    "is_thunk": false,
+    "calls_to": [
+      "0x00493A90"
+    ]
   },
   {
     "address": "0x00493A90",
@@ -23635,6 +24402,26 @@
     "calls_to": [
       "0x00493BAE"
     ]
+  },
+  {
+    "address": "0x00493DC4",
+    "address_int": 4799940,
+    "name": "sub_00493DC4",
+    "size": 305,
+    "num_blocks": 21,
+    "num_instructions": 73,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x00493E61",
+    "address_int": 4800097,
+    "name": "sub_00493E61",
+    "size": 148,
+    "num_blocks": 19,
+    "num_instructions": 71,
+    "is_thunk": false,
+    "calls_to": []
   },
   {
     "address": "0x00493EF5",
@@ -23764,6 +24551,16 @@
     "size": 64,
     "num_blocks": 6,
     "num_instructions": 33,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x00494820",
+    "address_int": 4802592,
+    "name": "sub_00494820",
+    "size": 130,
+    "num_blocks": 3,
+    "num_instructions": 51,
     "is_thunk": false,
     "calls_to": []
   },
@@ -23922,6 +24719,26 @@
     "calls_to": [
       "0x00494D69"
     ]
+  },
+  {
+    "address": "0x00494FED",
+    "address_int": 4804589,
+    "name": "sub_00494FED",
+    "size": 309,
+    "num_blocks": 21,
+    "num_instructions": 70,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x0049508A",
+    "address_int": 4804746,
+    "name": "sub_0049508A",
+    "size": 152,
+    "num_blocks": 20,
+    "num_instructions": 68,
+    "is_thunk": false,
+    "calls_to": []
   },
   {
     "address": "0x00495122",
@@ -24123,6 +24940,26 @@
     ]
   },
   {
+    "address": "0x00495D10",
+    "address_int": 4807952,
+    "name": "sub_00495D10",
+    "size": 296,
+    "num_blocks": 21,
+    "num_instructions": 69,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x00495DA8",
+    "address_int": 4808104,
+    "name": "sub_00495DA8",
+    "size": 144,
+    "num_blocks": 20,
+    "num_instructions": 68,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
     "address": "0x00495E38",
     "address_int": 4808248,
     "name": "sub_00495E38",
@@ -24221,6 +25058,16 @@
     "size": 50,
     "num_blocks": 6,
     "num_instructions": 32,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x00496480",
+    "address_int": 4809856,
+    "name": "sub_00496480",
+    "size": 58,
+    "num_blocks": 4,
+    "num_instructions": 25,
     "is_thunk": false,
     "calls_to": []
   },
@@ -24501,6 +25348,16 @@
     "size": 509,
     "num_blocks": 2,
     "num_instructions": 14,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x00497E77",
+    "address_int": 4816503,
+    "name": "sub_00497E77",
+    "size": 499,
+    "num_blocks": 2,
+    "num_instructions": 11,
     "is_thunk": false,
     "calls_to": []
   },
@@ -25662,6 +26519,16 @@
     ]
   },
   {
+    "address": "0x0049D044",
+    "address_int": 4837444,
+    "name": "sub_0049D044",
+    "size": 34,
+    "num_blocks": 3,
+    "num_instructions": 9,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
     "address": "0x0049D066",
     "address_int": 4837478,
     "name": "sub_0049D066",
@@ -26367,6 +27234,39 @@
     "size": 41,
     "num_blocks": 7,
     "num_instructions": 37,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x0049E99E",
+    "address_int": 4843934,
+    "name": "sub_0049E99E",
+    "size": 90,
+    "num_blocks": 8,
+    "num_instructions": 37,
+    "is_thunk": false,
+    "calls_to": [
+      "0x004A0695",
+      "0x004A30F3"
+    ]
+  },
+  {
+    "address": "0x0049E9F8",
+    "address_int": 4844024,
+    "name": "sub_0049E9F8",
+    "size": 78,
+    "num_blocks": 14,
+    "num_instructions": 38,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
+    "address": "0x0049EA46",
+    "address_int": 4844102,
+    "name": "sub_0049EA46",
+    "size": 24,
+    "num_blocks": 3,
+    "num_instructions": 11,
     "is_thunk": false,
     "calls_to": []
   },
@@ -28308,6 +29208,16 @@
     "calls_to": []
   },
   {
+    "address": "0x004A4985",
+    "address_int": 4868485,
+    "name": "sub_004A4985",
+    "size": 61,
+    "num_blocks": 8,
+    "num_instructions": 32,
+    "is_thunk": false,
+    "calls_to": []
+  },
+  {
     "address": "0x004A49C2",
     "address_int": 4868546,
     "name": "sub_004A49C2",
@@ -28722,6 +29632,18 @@
     ]
   },
   {
+    "address": "0x004A628E",
+    "address_int": 4874894,
+    "name": "sub_004A628E",
+    "size": 10,
+    "num_blocks": 2,
+    "num_instructions": 29,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0049F864"
+    ]
+  },
+  {
     "address": "0x004A62A0",
     "address_int": 4874912,
     "name": "sub_004A62A0",
@@ -28731,6 +29653,18 @@
     "is_thunk": false,
     "calls_to": [
       "0x0049C1E2"
+    ]
+  },
+  {
+    "address": "0x004A62AB",
+    "address_int": 4874923,
+    "name": "sub_004A62AB",
+    "size": 10,
+    "num_blocks": 2,
+    "num_instructions": 29,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0049F864"
     ]
   },
   {
@@ -28747,6 +29681,18 @@
     ]
   },
   {
+    "address": "0x004A62C0",
+    "address_int": 4874944,
+    "name": "sub_004A62C0",
+    "size": 10,
+    "num_blocks": 2,
+    "num_instructions": 29,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0049F864"
+    ]
+  },
+  {
     "address": "0x004A62CC",
     "address_int": 4874956,
     "name": "sub_004A62CC",
@@ -28757,6 +29703,18 @@
     "calls_to": [
       "0x0049C7D0",
       "0x0049D112"
+    ]
+  },
+  {
+    "address": "0x004A62D4",
+    "address_int": 4874964,
+    "name": "sub_004A62D4",
+    "size": 10,
+    "num_blocks": 2,
+    "num_instructions": 29,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0049F864"
     ]
   },
   {
@@ -28779,6 +29737,18 @@
     "is_thunk": false,
     "calls_to": [
       "0x0049D112"
+    ]
+  },
+  {
+    "address": "0x004A6304",
+    "address_int": 4875012,
+    "name": "sub_004A6304",
+    "size": 10,
+    "num_blocks": 2,
+    "num_instructions": 29,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0049F864"
     ]
   },
   {
@@ -28818,6 +29788,18 @@
     ]
   },
   {
+    "address": "0x004A633F",
+    "address_int": 4875071,
+    "name": "sub_004A633F",
+    "size": 10,
+    "num_blocks": 2,
+    "num_instructions": 29,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0049F864"
+    ]
+  },
+  {
     "address": "0x004A634C",
     "address_int": 4875084,
     "name": "sub_004A634C",
@@ -28828,6 +29810,18 @@
     "calls_to": []
   },
   {
+    "address": "0x004A6366",
+    "address_int": 4875110,
+    "name": "sub_004A6366",
+    "size": 10,
+    "num_blocks": 2,
+    "num_instructions": 29,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0049F864"
+    ]
+  },
+  {
     "address": "0x004A6370",
     "address_int": 4875120,
     "name": "sub_004A6370",
@@ -28836,6 +29830,18 @@
     "num_instructions": 23,
     "is_thunk": false,
     "calls_to": []
+  },
+  {
+    "address": "0x004A638A",
+    "address_int": 4875146,
+    "name": "sub_004A638A",
+    "size": 10,
+    "num_blocks": 2,
+    "num_instructions": 29,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0049F864"
+    ]
   },
   {
     "address": "0x004A6394",
@@ -28858,6 +29864,18 @@
     "calls_to": []
   },
   {
+    "address": "0x004A63B9",
+    "address_int": 4875193,
+    "name": "sub_004A63B9",
+    "size": 10,
+    "num_blocks": 2,
+    "num_instructions": 29,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0049F864"
+    ]
+  },
+  {
     "address": "0x004A63C4",
     "address_int": 4875204,
     "name": "sub_004A63C4",
@@ -28866,5 +29884,17 @@
     "num_instructions": 7,
     "is_thunk": false,
     "calls_to": []
+  },
+  {
+    "address": "0x004A63CF",
+    "address_int": 4875215,
+    "name": "sub_004A63CF",
+    "size": 10,
+    "num_blocks": 2,
+    "num_instructions": 29,
+    "is_thunk": false,
+    "calls_to": [
+      "0x0049F864"
+    ]
   }
 ]

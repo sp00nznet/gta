@@ -61,7 +61,9 @@ void recomp_trace_enter(uint32_t va) {
 #define GTA_IMAGE_BASE   0x00400000u
 #define GTA_TIB_SIZE     0x00001000u
 #define GTA_STACK_SIZE   0x00100000u
-#define GTA_SCRATCH_SIZE 0x00010000u
+/* Objects, vtables and the DirectDraw surfaces the shim hands the game all
+ * live here, so it needs room for a few 640x480 buffers. */
+#define GTA_SCRATCH_SIZE 0x00400000u
 
 static void *g_tib_view, *g_stack_view, *g_scratch_view;
 static uint32_t g_stack_base, g_scratch_base, g_scratch_next;

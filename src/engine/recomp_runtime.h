@@ -17,6 +17,14 @@ int  recomp_init(void);
 void recomp_shutdown(void);
 int  load_original_data(const char *exe_path);
 
+/*
+ * Stack arguments for anything the lifted dispatcher calls -- IAT bridges and
+ * the DirectDraw shim's COM methods alike. RECOMP_ICALL pushes a dummy return
+ * address before the call, so it sits at esp+0 and the first argument is at
+ * esp+4. A callee cleans up 4 + 4*argc.
+ */
+#define ARG(n) MEM32(esp + 4 * (n))
+
 /* IAT bridge system (src/engine/iat_bridge.c) */
 void setup_iat_bridges(void);
 recomp_func_t iat_bridge_lookup(u32 target_va);
