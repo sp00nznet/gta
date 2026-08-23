@@ -44,6 +44,8 @@ carries its own instruments.
 | `GTA_FILE_TRACE=1` | names every file the game opens, and flags the ones it fails to get |
 | `GTA_MISSION=n` | holds the mission-number global at n, bypassing the front end's choice |
 | `GTA_AUDIO_TRACE=1` | mixer voice count and peak level once a second, plus every sample start |
+| `GTA_AUDIO_MUTE=1` | mix as normal but output silence -- headless runs should not blast the machine |
+| `GTA_AUDIO_DUMP=mix.wav` | write the mixed output to a WAV, so it can be measured or listened to later |
 
 The runtime also prints the game's own error buffer and decodes its
 `FatalError(msgId, line, ...)` calls, whose line number names the failing check.
@@ -228,9 +230,30 @@ the repo.
 `src/sound/mixer.c` is a software mixer: 40 voices at 22050 Hz 16-bit stereo,
 which is exactly the format of the game's music tracks, so those mix in without
 resampling. Sound effects arrive at whatever rate Miles was told -- 24041 Hz
-8-bit mono is typical -- and are point-resampled through a 16.16 accumulator.
-Miles' 8-bit PCM is unsigned offset binary, not signed, which is worth getting
-right: read as signed it is loud static rather than sound.
+16-bit stereo is typical -- and are point-resampled through a 16.16 accumulator.
+
+### The static
+
+The first version of this played extremely loud noise, and the cause is worth
+recording because the mixer was not at fault.
+
+`bridge_AIL_set_sample_type` was a stub: `{ esp += 4+12; }`. It popped its
+arguments and returned without calling the shim, so the sample format never
+arrived and every voice kept its 8-bit default. The game's samples are 16-bit,
+so the mixer read each sample one byte at a time -- which is noise by
+construction, at full amplitude, regardless of anything else.
+
+Two things made this harder to see than it should have been. The format is
+carried by exactly the call that was stubbed, so nothing in the log contradicted
+the wrong value. And a byte histogram of `LEVEL000.RAW` clusters hard at `0x00`
+and `0xFF`, which reads as "signed 8-bit" if you have already assumed the data
+is 8-bit -- they are the high bytes of small 16-bit samples. Measuring the data
+without checking the format first produced a confident wrong answer.
+
+Signedness is now taken from the flags the game passes rather than assumed:
+`AIL_set_sample_type`'s `flags` carries `DIG_PCM_SIGN`, and GTA1 sets it
+(`format=3 flags=0x1` -- 16-bit stereo, signed). Miles can carry either
+convention, so the mixer handles both.
 
 What is wired through:
 
@@ -265,3 +288,12 @@ MSS shim: start_sample voice=1 data=04381170 len=135136 24041Hz 8bit 1ch vol=73
 loads `track1.wav` (12,083,400 bytes, 22050 Hz 16-bit stereo) and hands it a
 voice, but the game never calls `AIL_start_stream` -- it is stuck in the same
 state-3 gap described above, so it never gets as far as starting the music.
+
+Verifying audio headlessly is what `GTA_AUDIO_DUMP` is for. Peak level alone
+does not distinguish sound from noise; the dumped mix does:
+
+| | broken (8-bit read of 16-bit data) | fixed |
+|---|---|---|
+| zero-crossing rate | noise-like | **0.086** (white noise is ~0.5) |
+| peak / RMS | pinned | 7058 / 898, crest 7.9 |
+| clipped samples | constant | **0.000%** |
