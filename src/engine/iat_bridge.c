@@ -663,9 +663,9 @@ static void bridge_joyGetPosEx(void) { eax = joyGetPosEx(ARG(1),(JOYINFOEX*)VA2P
 static void bridge_joyGetDevCapsA(void) { eax = joyGetDevCapsA(ARG(1),(JOYCAPSA*)VA2PTR(ARG(2)),ARG(3)); esp += 4+12; }
 
 /* ===== MSS bridges ===== */
-static void bridge_AIL_startup(void) { eax = AIL_startup(); esp += 4+4; }
-static void bridge_AIL_shutdown(void) { AIL_shutdown(); esp += 4+4; }
-static void bridge_AIL_ms_count(void) { eax = AIL_ms_count(); esp += 4+4; }
+static void bridge_AIL_startup(void) { eax = AIL_startup(); esp += 4+0; }   /* @0 */
+static void bridge_AIL_shutdown(void) { AIL_shutdown(); esp += 4+0; }   /* @0 */
+static void bridge_AIL_ms_count(void) { eax = AIL_ms_count(); esp += 4+0; }   /* @0 */
 static void bridge_AIL_set_digital_master_volume(void) { AIL_set_digital_master_volume((HDIGDRIVER)(uintptr_t)ARG(1),(s32)ARG(2)); esp += 4+8; }
 static void bridge_AIL_allocate_sample_handle(void) { eax=(u32)(uintptr_t)AIL_allocate_sample_handle((HDIGDRIVER)(uintptr_t)ARG(1)); esp += 4+4; }
 static void bridge_AIL_release_sample_handle(void) { AIL_release_sample_handle((HSAMPLE)(uintptr_t)ARG(1)); esp += 4+4; }
