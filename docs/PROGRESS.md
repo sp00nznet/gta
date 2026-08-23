@@ -51,7 +51,8 @@ only through pointers in `.data`.
 ## Phase 4: Shimming
 
 - [x] IAT bridge system -- all imports bridged with the correct stdcall convention
-- [x] Miles Sound System to SDL2 audio (38 `AIL_` functions)
+- [x] Miles Sound System to a waveOut software mixer (38 `AIL_` functions)
+- [x] Sound effects audibly play; sample status derived from the mixer
 - [x] Smacker shim (8 ordinals)
 - [x] KERNEL32/USER32/GDI32/ADVAPI32 to real Win32 pass-through
 - [x] WINMM to real Win32 joystick pass-through
@@ -87,6 +88,8 @@ only through pointers in `.data`.
 - [ ] Keyboard and joystick input through to the game
 - [ ] City map and style loading through the game's own path
 - [ ] Gameplay loop
+- [x] Sound effects play (verified by mixer peak level)
+- [ ] Music plays (blocked: the game never calls `AIL_start_stream`)
 - [ ] Audio verified against the original
 - [ ] Save games
 

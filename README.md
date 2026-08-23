@@ -26,7 +26,7 @@ own COM vtables.*
 | **Phase 4** | **Complete** | Compilation and linking |
 | **Phase 5** | **Complete** | Runtime bringup -- CRT init, import bridging, WinMain |
 | **Phase 6** | **Complete** | Win32/DirectDraw HAL -- COM shim, 75 vtable slots, window and surfaces |
-| **Phase 7** | **In Progress** | **Visible frames and input** -- the title screen renders and the front end responds to keys. Remaining: menu navigation through to a city, mission selection, in-game rendering |
+| **Phase 7** | **In Progress** | **Frames, input and audio** -- the front end responds to keys and loads Liberty City through its own menu; sound effects play through a waveOut mixer. Remaining: the front end never starts the loaded game (see docs/PROGRESS.md) |
 
 ## What Works Today
 
@@ -45,7 +45,9 @@ rendered title screen:
 - **Drives our DirectDraw**: `EnumDisplayModes`, `CreateSurface`, `Lock`/`Unlock`,
   `CreatePalette`/`SetEntries`, `Blt`/`BltFast`, `Flip` -- 75 slots across four
   interfaces, each a bridge cookie in a vtable built in game memory
-- **Plays its intro path** through the Smacker and Miles shims
+- **Plays sound**: a waveOut software mixer stands in for the Miles Sound
+  System -- 40 voices, sample format and rate from the game's own calls, and
+  music tracks loaded from RIFF/WAVE
 - **Renders**: hundreds of frames captured per run, no crash, running until the
   watchdog stops it
 - **Takes input**: keys arrive as window messages, through `PeekMessageA` and
@@ -113,7 +115,7 @@ GTA2 evolves it onto DirectX 6, with similar file formats and game logic.
 - CMake 3.20+
 - Visual Studio 2022 (MSVC), Win32 target
 - Python 3.10+ with `capstone` and `pefile`
-- SDL2 (optional -- stubs are used when it is not found)
+- SDL2 (optional; audio does not need it -- the mixer uses waveOut)
 - The [pcrecomp](https://github.com/sp00nznet/pcrecomp) toolkit
 
 **Step 1: lift the game**
@@ -181,7 +183,7 @@ src/
   common/       Shared types, math, memory model
   engine/       Recomp runtime, IAT bridges, image loader, premap launcher
   video/        DirectDraw shim, Smacker shim
-  sound/        SDL2 audio replacing Miles Sound System
+  sound/        waveOut mixer replacing the Miles Sound System
   renderer/     Modern OpenGL 4.x, replacing SciTech MGL (not yet wired)
   net/          Network play replacing DirectPlay (stub)
   recomp/gen/           Lifted GTA1   -- 2,590 functions, 952,581 lines (generated)

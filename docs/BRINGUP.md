@@ -43,6 +43,7 @@ carries its own instruments.
 | `GTA_KEY_DELAY_MS=n` | wait before the first scripted key (default 3000) |
 | `GTA_FILE_TRACE=1` | names every file the game opens, and flags the ones it fails to get |
 | `GTA_MISSION=n` | holds the mission-number global at n, bypassing the front end's choice |
+| `GTA_AUDIO_TRACE=1` | mixer voice count and peak level once a second, plus every sample start |
 
 The runtime also prints the game's own error buffer and decodes its
 `FatalError(msgId, line, ...)` calls, whose line number names the failing check.
@@ -209,3 +210,58 @@ seventeen times each, and `AIL_open_stream` on `..//music//track1.wav`.
 `SDL_AddTimer` is stubbed the same way, so Miles timers never fire -- but that
 turns out not to matter here: `AIL_register_timer` and `AIL_start_timer` are
 never called on this path.
+
+## Audio
+
+The Miles shim had all the bookkeeping and none of the output: every entry point
+updated a struct and returned, with `/* TODO: actually start SDL2 audio
+playback */` where the sound should have been. And SDL2 is not present in this
+build, so even the parts that did call SDL fell through to the stubs at the top
+of `miles_shim.c` -- which is how `AIL_ms_count` came to return a constant zero
+and hang the level loader.
+
+Rather than take the SDL2 dependency (the vcpkg copy on this machine is x64;
+this target is Win32), output goes through **waveOut**. `winmm` is already
+linked for joystick input, so it costs nothing and works for anyone who clones
+the repo.
+
+`src/sound/mixer.c` is a software mixer: 40 voices at 22050 Hz 16-bit stereo,
+which is exactly the format of the game's music tracks, so those mix in without
+resampling. Sound effects arrive at whatever rate Miles was told -- 24041 Hz
+8-bit mono is typical -- and are point-resampled through a 16.16 accumulator.
+Miles' 8-bit PCM is unsigned offset binary, not signed, which is worth getting
+right: read as signed it is loud static rather than sound.
+
+What is wired through:
+
+| Miles | Mixer |
+|---|---|
+| `AIL_set_sample_address` | voice PCM (borrowed from game memory, not copied) |
+| `AIL_set_sample_type` | `DIG_F_` format to bits and channels |
+| `AIL_set_sample_playback_rate` | resample step |
+| `AIL_set_sample_volume` / `_pan` / `_loop_count` | per-voice gain, pan, loop |
+| `AIL_start_sample` / `_stop_` / `_end_` | voice start and stop |
+| `AIL_sample_status` | **derived from the mixer** -- see below |
+| `AIL_open_stream` | RIFF/WAVE load, chunk-walked |
+| `AIL_start_stream` / `_pause_` / `_close_` | voice start, stop, free |
+| `AIL_stream_position` | bytes consumed |
+| `AIL_set_digital_master_volume` | master gain |
+
+`AIL_sample_status` mattering is not obvious. It used to return whatever status
+was last stored, so a sample that finished playing still reported `SMP_PLAYING`
+forever -- the game could allocate a voice and never learn it was free again. It
+now asks the mixer whether the voice is still running.
+
+`GTA_AUDIO_TRACE=1` reports voice count and peak level about once a second, plus
+the parameters of every `AIL_start_sample`. On a headless run that is the only
+way to tell "mixing silence" from "mixing nothing":
+
+```
+MSS shim: start_sample voice=1 data=04381170 len=135136 24041Hz 8bit 1ch vol=73
+  AUDIO: 1 voice(s) playing, peak 7884
+```
+
+**Music does not play yet, and that is not an audio bug.** `AIL_open_stream`
+loads `track1.wav` (12,083,400 bytes, 22050 Hz 16-bit stereo) and hands it a
+voice, but the game never calls `AIL_start_stream` -- it is stuck in the same
+state-3 gap described above, so it never gets as far as starting the music.

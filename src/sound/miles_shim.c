@@ -6,6 +6,7 @@
  */
 
 #include "miles_shim.h"
+#include "mixer.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -50,6 +51,9 @@ typedef struct {
     s32 pan;       /* 0(left) - 64(center) - 127(right) */
     s32 loop_count;
     SDL_AudioDeviceID device;
+    int voice;          /* mixer voice, or -1 */
+    int bits, channels; /* from AIL_set_sample_type */
+    int was_playing;
 } MSS_Sample;
 
 typedef struct {
@@ -60,7 +64,9 @@ typedef struct {
     s32 pan;
     s32 loop_count;
     int paused;
-    /* TODO: SDL_AudioStream or SDL_mixer for actual playback */
+    int voice;          /* mixer voice, or -1 */
+    void *pcm;          /* decoded WAV, owned */
+    u32 pcm_bytes;
 } MSS_Stream;
 
 typedef struct {
@@ -85,6 +91,7 @@ u32 AIL_startup(void) {
 #ifdef _WIN32
     g_ms_base = GetTickCount();
 #endif
+    mixer_init();
 
     if (SDL_InitSubSystem(SDL_INIT_AUDIO | SDL_INIT_TIMER) < 0) {
         fprintf(stderr, "MSS shim: SDL audio init failed: %s\n", SDL_GetError());
@@ -97,11 +104,12 @@ u32 AIL_startup(void) {
     g_master_volume = 127;
     g_mss_initialized = 1;
 
-    fprintf(stderr, "MSS shim: initialized (SDL2 audio backend)\n");
+    fprintf(stderr, "MSS shim: initialized (waveOut mixer)\n");
     return 1;
 }
 
 void AIL_shutdown(void) {
+    mixer_shutdown();
     if (!g_mss_initialized) return;
 
     /* Stop all timers */
@@ -147,6 +155,9 @@ HSAMPLE AIL_allocate_sample_handle(HDIGDRIVER dig) {
             g_samples[i].volume = 127;
             g_samples[i].pan = 64;
             g_samples[i].rate = 22050;
+            g_samples[i].bits = 8;        /* Miles default until set_sample_type */
+            g_samples[i].channels = 1;
+            g_samples[i].voice = mixer_voice_alloc();
             return (HSAMPLE)(intptr_t)(i + 1);
         }
     }
@@ -160,6 +171,8 @@ static MSS_Sample *get_sample(HSAMPLE s) {
 }
 
 void AIL_release_sample_handle(HSAMPLE s) {
+    { MSS_Sample *smp = get_sample(s);
+      if (smp && smp->voice >= 0) { mixer_voice_free(smp->voice); smp->voice = -1; } }
     MSS_Sample *smp = get_sample(s);
     if (smp) {
         smp->active = 0;
@@ -185,54 +198,89 @@ void AIL_set_sample_file(HSAMPLE s, void *file_image, s32 block) {
     }
 }
 
+static void sample_push(MSS_Sample *smp) {
+    if (!smp || smp->voice < 0) return;
+    mixer_voice_set_pcm(smp->voice, smp->data, smp->data_len,
+                        smp->rate, smp->bits, smp->channels);
+    mixer_voice_set_volume(smp->voice, smp->volume);
+    mixer_voice_set_pan(smp->voice, smp->pan);
+    mixer_voice_set_loop(smp->voice, smp->loop_count);
+}
+
 void AIL_set_sample_address(HSAMPLE s, void *start, u32 len) {
     MSS_Sample *smp = get_sample(s);
     if (smp) {
         smp->data = start;
         smp->data_len = len;
+        sample_push(smp);
     }
 }
 
 void AIL_set_sample_type(HSAMPLE s, s32 format, u32 flags) {
-    /* TODO: store format info */
+    /* Miles DIG_F_: 0 mono 8, 1 mono 16, 2 stereo 8, 3 stereo 16. */
+    MSS_Sample *smp = get_sample(s);
+    (void)flags;
+    if (!smp) return;
+    smp->bits     = (format & 1) ? 16 : 8;
+    smp->channels = (format & 2) ? 2 : 1;
+    sample_push(smp);
 }
 
 void AIL_set_sample_playback_rate(HSAMPLE s, s32 rate) {
     MSS_Sample *smp = get_sample(s);
-    if (smp) smp->rate = rate;
+    if (!smp) return;
+    smp->rate = rate;
+    if (smp->voice >= 0) mixer_voice_set_rate(smp->voice, rate);
 }
 
 void AIL_set_sample_volume(HSAMPLE s, s32 volume) {
     MSS_Sample *smp = get_sample(s);
-    if (smp) smp->volume = volume;
+    if (!smp) return;
+    smp->volume = volume;
+    if (smp->voice >= 0) mixer_voice_set_volume(smp->voice, volume);
 }
 
 void AIL_set_sample_pan(HSAMPLE s, s32 pan) {
     MSS_Sample *smp = get_sample(s);
-    if (smp) smp->pan = pan;
+    if (!smp) return;
+    smp->pan = pan;
+    if (smp->voice >= 0) mixer_voice_set_pan(smp->voice, pan);
 }
 
 void AIL_set_sample_loop_count(HSAMPLE s, s32 count) {
     MSS_Sample *smp = get_sample(s);
-    if (smp) smp->loop_count = count;
+    if (!smp) return;
+    smp->loop_count = count;
+    if (smp->voice >= 0) mixer_voice_set_loop(smp->voice, count);
 }
 
 void AIL_start_sample(HSAMPLE s) {
     MSS_Sample *smp = get_sample(s);
     if (smp) {
         smp->status = SMP_PLAYING;
-        /* TODO: actually start SDL2 audio playback */
+        smp->was_playing = 1;
+        sample_push(smp);
+        if (mixer_trace_enabled())
+            fprintf(stderr, "MSS shim: start_sample voice=%d data=%p len=%u %dHz %dbit %dch vol=%d\n",
+                smp->voice, smp->data, smp->data_len, (int)smp->rate,
+                smp->bits, smp->channels, (int)smp->volume);
+        if (smp->voice >= 0) mixer_voice_start(smp->voice);
     }
 }
 
 void AIL_stop_sample(HSAMPLE s) {
     MSS_Sample *smp = get_sample(s);
-    if (smp) smp->status = SMP_STOPPED;
+    if (!smp) return;
+    smp->status = SMP_STOPPED;
+    if (smp->voice >= 0) mixer_voice_stop(smp->voice);
 }
 
 void AIL_end_sample(HSAMPLE s) {
     MSS_Sample *smp = get_sample(s);
-    if (smp) smp->status = SMP_DONE;
+    if (!smp) return;
+    smp->status = SMP_DONE;
+    smp->was_playing = 0;
+    if (smp->voice >= 0) mixer_voice_stop(smp->voice);
 }
 
 void AIL_resume_sample(HSAMPLE s) {
@@ -242,7 +290,12 @@ void AIL_resume_sample(HSAMPLE s) {
 
 s32 AIL_sample_status(HSAMPLE s) {
     MSS_Sample *smp = get_sample(s);
-    return smp ? smp->status : SMP_FREE;
+    if (!smp) return SMP_FREE;
+    if (smp->was_playing && smp->voice >= 0 && !mixer_voice_playing(smp->voice)) {
+        smp->was_playing = 0;
+        smp->status = SMP_DONE;
+    }
+    return smp->status;
 }
 
 s32 AIL_sample_playback_rate(HSAMPLE s) {
@@ -271,8 +324,21 @@ HSTREAM AIL_open_stream(HDIGDRIVER dig, const char *filename, s32 stream_mem) {
             g_streams[i].volume = 127;
             g_streams[i].pan = 64;
             g_streams[i].loop_count = 1;
+            g_streams[i].voice = -1;
             if (filename) {
+                int rate = 22050, bits = 16, chans = 2;
+                u32 nbytes = 0;
                 strncpy(g_streams[i].filename, filename, sizeof(g_streams[i].filename) - 1);
+                g_streams[i].pcm = mixer_load_wav(filename, &nbytes, &rate, &bits, &chans);
+                if (g_streams[i].pcm) {
+                    g_streams[i].pcm_bytes = nbytes;
+                    g_streams[i].voice = mixer_voice_alloc();
+                    if (g_streams[i].voice >= 0)
+                        mixer_voice_set_pcm(g_streams[i].voice, g_streams[i].pcm,
+                                            nbytes, rate, bits, chans);
+                }
+                fprintf(stderr, "MSS shim: stream %s (%u bytes, %d Hz %d-bit %dch)\n",
+                        g_streams[i].pcm ? "loaded" : "FAILED", nbytes, rate, bits, chans);
             }
             fprintf(stderr, "MSS shim: open_stream '%s'\n", filename ? filename : "(null)");
             return (HSTREAM)(intptr_t)(i + 1);
@@ -290,6 +356,10 @@ static MSS_Stream *get_stream(HSTREAM stream) {
 void AIL_close_stream(HSTREAM stream) {
     MSS_Stream *str = get_stream(stream);
     if (str) {
+        if (str->voice >= 0) { mixer_voice_stop(str->voice); mixer_voice_free(str->voice); }
+        mixer_free_wav(str->pcm);
+        str->pcm = NULL;
+        str->voice = -1;
         str->active = 0;
         str->status = SMP_FREE;
     }
@@ -297,7 +367,12 @@ void AIL_close_stream(HSTREAM stream) {
 
 void AIL_pause_stream(HSTREAM stream, s32 onoff) {
     MSS_Stream *str = get_stream(stream);
-    if (str) str->paused = onoff;
+    if (!str) return;
+    str->paused = onoff;
+    if (str->voice >= 0) {
+        if (onoff) mixer_voice_stop(str->voice);
+        else       mixer_voice_start(str->voice);
+    }
 }
 
 void AIL_start_stream(HSTREAM stream) {
@@ -305,13 +380,23 @@ void AIL_start_stream(HSTREAM stream) {
     if (str) {
         str->status = SMP_PLAYING;
         str->paused = 0;
+        if (str->voice >= 0) {
+            mixer_voice_set_volume(str->voice, str->volume);
+            mixer_voice_set_pan(str->voice, str->pan);
+            mixer_voice_set_loop(str->voice, str->loop_count);
+            mixer_voice_start(str->voice);
+        }
         /* TODO: start SDL2 audio stream from file */
     }
 }
 
 s32 AIL_stream_status(HSTREAM stream) {
     MSS_Stream *str = get_stream(stream);
-    return str ? str->status : SMP_FREE;
+    if (!str) return SMP_FREE;
+    if (str->status == SMP_PLAYING && !str->paused &&
+        str->voice >= 0 && !mixer_voice_playing(str->voice))
+        str->status = SMP_DONE;
+    return str->status;
 }
 
 void AIL_set_stream_loop_count(HSTREAM stream, s32 count) {
@@ -321,7 +406,9 @@ void AIL_set_stream_loop_count(HSTREAM stream, s32 count) {
 
 void AIL_set_stream_volume(HSTREAM stream, s32 volume) {
     MSS_Stream *str = get_stream(stream);
-    if (str) str->volume = volume;
+    if (!str) return;
+    str->volume = volume;
+    if (str->voice >= 0) mixer_voice_set_volume(str->voice, volume);
 }
 
 void AIL_set_stream_pan(HSTREAM stream, s32 pan) {
@@ -330,8 +417,9 @@ void AIL_set_stream_pan(HSTREAM stream, s32 pan) {
 }
 
 s32 AIL_stream_position(HSTREAM stream) {
-    /* TODO: return actual position */
-    return 0;
+    MSS_Stream *str = get_stream(stream);
+    if (!str || str->voice < 0) return 0;
+    return (s32)mixer_voice_position(str->voice);
 }
 
 void AIL_stream_info(HSTREAM stream, s32 *datarate, s32 *sndtype, s32 *length, s32 *memory) {
@@ -344,7 +432,9 @@ void AIL_stream_info(HSTREAM stream, s32 *datarate, s32 *sndtype, s32 *length, s
 /* --- Master volume --- */
 
 void AIL_set_digital_master_volume(HDIGDRIVER dig, s32 volume) {
+    (void)dig;
     g_master_volume = volume;
+    mixer_set_master_volume(volume);
 }
 
 s32 AIL_digital_master_volume(HDIGDRIVER dig) {

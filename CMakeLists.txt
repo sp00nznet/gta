@@ -41,6 +41,7 @@ add_executable(gta1
 
     # Shim layers
     src/sound/miles_shim.c
+    src/sound/mixer.c
     src/video/smacker_shim.c
     src/video/ddraw_shim.c
 
