@@ -60,14 +60,54 @@ uint32_t g_enter_idx;
  */
 #define GTA_FATAL_ERROR_VA 0x00422900u
 
+/*
+ * GTA_WATCH=0x48dd40,0x48d9b0 prints esp, ecx and the first four stack
+ * arguments on entry to those functions. Walking an argument down a call chain
+ * by hand means recomputing frame offsets at every level and being wrong once;
+ * this just shows where the value turns into something it should not be.
+ */
+#define MAX_WATCHES 16
+static uint32_t g_watch[MAX_WATCHES];
+static int      g_watch_count = -1;
+
+static int is_watched(uint32_t va) {
+    if (g_watch_count < 0) {
+        char buf[256], *p;
+        g_watch_count = 0;
+        if (GetEnvironmentVariableA("GTA_WATCH", buf, sizeof(buf))) {
+            for (p = strtok(buf, ","); p && g_watch_count < MAX_WATCHES;
+                 p = strtok(NULL, ",")) {
+                g_watch[g_watch_count++] = (uint32_t)strtoul(p, NULL, 16);
+            }
+        }
+    }
+    for (int i = 0; i < g_watch_count; i++)
+        if (g_watch[i] == va) return 1;
+    return 0;
+}
+
+/*
+ * esp alongside the address. The ring records order, but nesting is what says
+ * which of these frames called which -- and esp is exactly that, for free.
+ */
+uint32_t g_enter_esp[RECOMP_ENTER_SIZE];
+uint32_t g_enter_ecx[RECOMP_ENTER_SIZE];   /* __thiscall passes `this` here */
+
 void recomp_trace_enter(uint32_t va) {
     g_enter_trace[g_enter_idx & (RECOMP_ENTER_SIZE - 1)] = va;
+    g_enter_esp[g_enter_idx & (RECOMP_ENTER_SIZE - 1)] = g_esp;
+    g_enter_ecx[g_enter_idx & (RECOMP_ENTER_SIZE - 1)] = g_ecx;
     g_enter_idx++;
 
     if (va == GTA_FATAL_ERROR_VA) {
         fprintf(stderr, "*** FatalError(msg=0x%08X, line=%u, arg3=0x%08X) ***\n",
                 MEM32(g_esp + 4), MEM32(g_esp + 8), MEM32(g_esp + 12));
         recomp_dump_trace("FatalError");
+    }
+    if (is_watched(va)) {
+        fprintf(stderr, "  WATCH 0x%08X esp=0x%08X ecx=0x%08X args=[0x%08X 0x%08X 0x%08X 0x%08X]\n",
+                va, g_esp, g_ecx, MEM32(g_esp + 4), MEM32(g_esp + 8),
+                MEM32(g_esp + 12), MEM32(g_esp + 16));
     }
 }
 #endif
@@ -199,7 +239,9 @@ void recomp_dump_trace(const char *why) {
     fprintf(stderr, "--- last %d functions entered ---\n", RECOMP_ENTER_SIZE);
     for (uint32_t i = 0; i < RECOMP_ENTER_SIZE; i++) {
         uint32_t idx = (g_enter_idx - RECOMP_ENTER_SIZE + i) & (RECOMP_ENTER_SIZE - 1);
-        if (g_enter_trace[idx]) fprintf(stderr, "  0x%08X\n", g_enter_trace[idx]);
+        if (g_enter_trace[idx])
+            fprintf(stderr, "  0x%08X  esp=0x%08X ecx=0x%08X\n",
+                    g_enter_trace[idx], g_enter_esp[idx], g_enter_ecx[idx]);
     }
 #endif
     fflush(stderr);

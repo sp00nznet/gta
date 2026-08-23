@@ -40,6 +40,7 @@ u32  ddraw_shim_getproc(const char *name);
 #include "../video/smacker_shim.h"
 
 /* ===== Bridge address allocation ===== */
+#define GTA_IMAGE_BASE 0x00400000u
 #define BRIDGE_BASE 0xB0000000u
 #define MAX_BRIDGES 512
 
@@ -72,14 +73,123 @@ u32 recomp_alloc_bridge(const char *name, void (*handler)(void)) {
     return BRIDGE_BASE + num_bridges++;
 }
 
-static void register_bridge(u32 iat_va, const char *name, void (*handler)(void)) {
-    u32 bridge_addr = recomp_alloc_bridge(name, handler);
+/*
+ * Bind bridges by NAME, from the image's own import table.
+ *
+ * The VA of every IAT slot used to be written out by hand next to each handler.
+ * Thirty of the hundred and sixty-seven were wrong: the whole USER32 block had
+ * slipped by one entry, so GetDC was serviced by the SetTimer bridge -- calling
+ * the wrong API and, because the bridge cleans up its own argument count,
+ * popping twelve bytes too many off the simulated stack. The frame damage
+ * surfaced later as a NULL string argument in an unrelated function.
+ *
+ * The import directory is right there in the image we mapped, and the INT
+ * (OriginalFirstThunk) still holds the names after we overwrite the IAT with
+ * cookies, so look the slot up instead of asserting where it is. Anything
+ * imported but unbridged, or bridged but not imported, now says so.
+ */
+/* MSS exports stdcall-decorated names (_AIL_startup@0); compare undecorated. */
+static int same_import(const char *imported, const char *want) {
+    if (*imported == '_') imported++;
+    while (*want && *imported && *imported != '@') {
+        if (*want++ != *imported++) return 0;
+    }
+    return *want == 0 && (*imported == 0 || *imported == '@');
+}
+
+static u32 find_iat_slot(const char *want) {
+    u32 nt = GTA_IMAGE_BASE + MEM32(GTA_IMAGE_BASE + 0x3C);
+    u32 imports = MEM32(nt + 0x80);            /* DataDirectory[1].VirtualAddress */
+    u32 desc;
+
+    if (!imports) return 0;
+    for (desc = GTA_IMAGE_BASE + imports; MEM32(desc + 12); desc += 20) {
+        u32 int_rva = MEM32(desc + 0);         /* OriginalFirstThunk */
+        u32 iat_rva = MEM32(desc + 16);        /* FirstThunk         */
+        u32 i;
+        if (!int_rva) int_rva = iat_rva;       /* some linkers omit the INT */
+        for (i = 0; ; i++) {
+            u32 thunk = MEM32(GTA_IMAGE_BASE + int_rva + i * 4);
+            if (!thunk) break;
+            if (thunk & 0x80000000u) {         /* imported by ordinal */
+                char buf[24];
+                sprintf(buf, "ordinal_%u", thunk & 0xFFFFu);
+                if (!strcmp(buf, want))
+                    return GTA_IMAGE_BASE + iat_rva + i * 4;
+            } else {
+                const char *name = (const char *)(uintptr_t)
+                                   ADDR(GTA_IMAGE_BASE + thunk + 2);
+                if (same_import(name, want))
+                    return GTA_IMAGE_BASE + iat_rva + i * 4;
+            }
+        }
+    }
+    return 0;
+}
+
+static int g_unbound;
+
+static void register_bridge(const char *name, void (*handler)(void)) {
+    u32 iat_va = find_iat_slot(name);
+    u32 bridge_addr;
+    if (!iat_va) {
+        fprintf(stderr, "  BRIDGE: '%s' is not imported by this build\n", name);
+        g_unbound++;
+        return;
+    }
+    bridge_addr = recomp_alloc_bridge(name, handler);
     if (!bridge_addr) return;
     bridges[bridge_addr - BRIDGE_BASE].iat_va = iat_va;
     MEM32(iat_va) = bridge_addr;
 }
 
+/* Report any import we never bridged: it would dispatch to nothing at runtime. */
+static void report_unbridged(void) {
+    u32 nt = GTA_IMAGE_BASE + MEM32(GTA_IMAGE_BASE + 0x3C);
+    u32 imports = MEM32(nt + 0x80);
+    u32 desc, missing = 0;
+
+    if (!imports) return;
+    for (desc = GTA_IMAGE_BASE + imports; MEM32(desc + 12); desc += 20) {
+        const char *dll = (const char *)(uintptr_t)ADDR(GTA_IMAGE_BASE + MEM32(desc + 12));
+        u32 int_rva = MEM32(desc + 0), iat_rva = MEM32(desc + 16), i;
+        if (!int_rva) int_rva = iat_rva;
+        for (i = 0; ; i++) {
+            u32 thunk = MEM32(GTA_IMAGE_BASE + int_rva + i * 4);
+            u32 slot  = GTA_IMAGE_BASE + iat_rva + i * 4;
+            if (!thunk) break;
+            if (MEM32(slot) >= BRIDGE_BASE && MEM32(slot) < BRIDGE_BASE + (u32)num_bridges)
+                continue;
+            missing++;
+            if (thunk & 0x80000000u)
+                fprintf(stderr, "  BRIDGE: UNBRIDGED %s ordinal %u\n", dll, thunk & 0xFFFFu);
+            else
+                fprintf(stderr, "  BRIDGE: UNBRIDGED %s!%s\n", dll,
+                        (const char *)(uintptr_t)ADDR(GTA_IMAGE_BASE + thunk + 2));
+        }
+    }
+    fprintf(stderr, "  %d bridges bound, %u imports unbridged, %d names not imported\n",
+            num_bridges, missing, g_unbound);
+}
+
 static int g_bridge_verbose = 1;
+
+/*
+ * Every bridge is a stdcall callee: it must pop the dummy return address plus
+ * exactly its own arguments. A wrong count shifts the caller's frame, and that
+ * surfaces much later as a garbage argument in an unrelated function -- a NULL
+ * string, or the return-address marker turning up as a length. With
+ * GTA_BRIDGE_ESP set, wrap each call and report what it actually moved esp by,
+ * so a bad count is caught at the bridge rather than three frames downstream.
+ */
+static int g_check_esp = -1;
+static u32 g_wrapped_idx, g_wrapped_esp;
+
+static void bridge_esp_check(void) {
+    u32 idx = g_wrapped_idx, before = g_wrapped_esp;
+    bridges[idx].handler();
+    fprintf(stderr, "    [esp] %-28s %+d\n", bridges[idx].name, (int)(esp - before));
+}
 
 recomp_func_t iat_bridge_lookup(u32 target_va) {
     if (target_va >= BRIDGE_BASE && target_va < BRIDGE_BASE + (u32)num_bridges) {
@@ -87,6 +197,15 @@ recomp_func_t iat_bridge_lookup(u32 target_va) {
         g_bridge_hit = idx;
         if (g_bridge_verbose) {
             fprintf(stderr, "  BRIDGE: %s (esp=0x%08X)\n", bridges[idx].name, esp);
+        }
+        if (g_check_esp < 0) {
+            char buf[8];
+            g_check_esp = GetEnvironmentVariableA("GTA_BRIDGE_ESP", buf, sizeof(buf)) ? 1 : 0;
+        }
+        if (g_check_esp) {
+            g_wrapped_idx = idx;
+            g_wrapped_esp = esp;
+            return bridge_esp_check;
         }
         return bridges[idx].handler;
     }
@@ -290,6 +409,13 @@ static void bridge_CreateWindowExA(void) {
     eax = (u32)(uintptr_t)CreateWindowExA(ARG(1), VA2STR(ARG(2)), VA2STR(ARG(3)), ARG(4), (int)ARG(5),(int)ARG(6),(int)ARG(7),(int)ARG(8), (HWND)(uintptr_t)ARG(9), (HMENU)(uintptr_t)MEM32(esp+40), (HINSTANCE)(uintptr_t)MEM32(esp+44), MEM32(esp+48)?VA2PTR(MEM32(esp+48)):NULL);
     esp += 4+48;
 }
+/* Imported by this build but previously unbridged -- the old hand-written VA
+ * table had them mapped to other functions' slots. */
+static void bridge_SetFocus(void) { eax = (u32)(uintptr_t)SetFocus((HWND)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_SetWindowLongA(void) { eax = (u32)SetWindowLongA((HWND)(uintptr_t)ARG(1), (int)ARG(2), (LONG)ARG(3)); esp += 4+12; }
+static void bridge_PostMessageA(void) { eax = PostMessageA((HWND)(uintptr_t)ARG(1), ARG(2), ARG(3), ARG(4)); esp += 4+16; }
+static void bridge_ShowCursor(void) { eax = (u32)ShowCursor((BOOL)ARG(1)); esp += 4+4; }
+static void bridge_SetWindowPlacement(void) { eax = SetWindowPlacement((HWND)(uintptr_t)ARG(1), (const WINDOWPLACEMENT*)VA2PTR(ARG(2))); esp += 4+8; }
 static void bridge_DestroyWindow(void) { eax = DestroyWindow((HWND)(uintptr_t)ARG(1)); esp += 4+4; }
 static void bridge_ShowWindow(void) { eax = ShowWindow((HWND)(uintptr_t)ARG(1), (int)ARG(2)); esp += 4+8; }
 static void bridge_UpdateWindow(void) { eax = UpdateWindow((HWND)(uintptr_t)ARG(1)); esp += 4+4; }
@@ -403,14 +529,122 @@ static void bridge_RealizePalette(void) { eax = RealizePalette((HDC)(uintptr_t)A
 static void bridge_BitBlt(void) { eax = BitBlt((HDC)(uintptr_t)ARG(1),(int)ARG(2),(int)ARG(3),(int)ARG(4),(int)ARG(5),(HDC)(uintptr_t)ARG(6),(int)ARG(7),(int)MEM32(esp+32),(DWORD)MEM32(esp+36)); esp += 4+36; }
 static void bridge_CreateCompatibleBitmap(void) { eax = (u32)(uintptr_t)CreateCompatibleBitmap((HDC)(uintptr_t)ARG(1),(int)ARG(2),(int)ARG(3)); esp += 4+12; }
 static void bridge_GetStockObject(void) { eax = (u32)(uintptr_t)GetStockObject((int)ARG(1)); esp += 4+4; }
-/* Remaining GDI stubs */
-static void bridge_gdi_stub(void) { eax = 0; esp += 4+4; }
+/*
+ * These nine shared one stub that popped a single argument. Their real arities
+ * run from 1 to 11 -- StretchBlt alone was leaving 40 bytes on the simulated
+ * stack. They are all plain pass-throughs, and a stdcall callee has to clean up
+ * exactly its own arguments, so there is no such thing as a generic stub here.
+ */
+static void bridge_SetSystemPaletteUse(void) { eax = SetSystemPaletteUse((HDC)(uintptr_t)ARG(1), ARG(2)); esp += 4+8; }
+static void bridge_GetSystemPaletteUse(void) { eax = GetSystemPaletteUse((HDC)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_GetSystemPaletteEntries(void) { eax = GetSystemPaletteEntries((HDC)(uintptr_t)ARG(1), ARG(2), ARG(3), (PALETTEENTRY*)VA2PTR(ARG(4))); esp += 4+16; }
+static void bridge_CreateDCA(void) { eax = (u32)(uintptr_t)CreateDCA(ARG(1)?VA2STR(ARG(1)):NULL, ARG(2)?VA2STR(ARG(2)):NULL, ARG(3)?VA2STR(ARG(3)):NULL, ARG(4)?(const DEVMODEA*)VA2PTR(ARG(4)):NULL); esp += 4+16; }
+static void bridge_Escape(void) { eax = Escape((HDC)(uintptr_t)ARG(1), (int)ARG(2), (int)ARG(3), ARG(4)?VA2STR(ARG(4)):NULL, ARG(5)?VA2PTR(ARG(5)):NULL); esp += 4+20; }
+static void bridge_GetDIBits(void) { eax = GetDIBits((HDC)(uintptr_t)ARG(1), (HBITMAP)(uintptr_t)ARG(2), ARG(3), ARG(4), ARG(5)?VA2PTR(ARG(5)):NULL, (BITMAPINFO*)VA2PTR(ARG(6)), ARG(7)); esp += 4+28; }
+static void bridge_AnimatePalette(void) { eax = AnimatePalette((HPALETTE)(uintptr_t)ARG(1), ARG(2), ARG(3), (const PALETTEENTRY*)VA2PTR(ARG(4))); esp += 4+16; }
+static void bridge_StretchBlt(void) {
+    eax = StretchBlt((HDC)(uintptr_t)ARG(1), (int)ARG(2), (int)ARG(3), (int)ARG(4), (int)ARG(5),
+                     (HDC)(uintptr_t)ARG(6), (int)ARG(7), (int)ARG(8), (int)ARG(9), (int)ARG(10),
+                     (DWORD)ARG(11));
+    esp += 4+44;
+}
+static void bridge_SetStretchBltMode(void) { eax = SetStretchBltMode((HDC)(uintptr_t)ARG(1), (int)ARG(2)); esp += 4+8; }
 
 /* ===== ADVAPI32 bridges ===== */
-static void bridge_RegOpenKeyExA(void) { eax = RegOpenKeyExA((HKEY)(uintptr_t)ARG(1),VA2STR(ARG(2)),ARG(3),ARG(4),(PHKEY)VA2PTR(ARG(5))); esp += 4+20; }
-static void bridge_RegQueryValueExA(void) { eax = RegQueryValueExA((HKEY)(uintptr_t)ARG(1),VA2STR(ARG(2)),NULL,ARG(4)?VA2PTR(ARG(4)):NULL,ARG(5)?VA2PTR(ARG(5)):NULL,ARG(6)?VA2PTR(ARG(6)):NULL); esp += 4+24; }
-static void bridge_RegSetValueExA(void) { eax = RegSetValueExA((HKEY)(uintptr_t)ARG(1),VA2STR(ARG(2)),0,ARG(4),VA2PTR(ARG(5)),ARG(6)); esp += 4+24; }
-static void bridge_RegCloseKey(void) { eax = RegCloseKey((HKEY)(uintptr_t)ARG(1)); esp += 4+4; }
+/*
+ * A registry of our own, for the two keys the game cannot start without:
+ *
+ *   HKLM\SOFTWARE\DMA Design\Grand Theft Auto            Language
+ *   HKLM\SOFTWARE\DMA Design\Grand Theft Auto\Controls   Control 0 .. Control 9
+ *
+ * The installer and GTA Settings.exe write those; a failed lookup is fatal to
+ * the game (FatalError -257 at line 426). Answering them here keeps the
+ * recompilation self-contained: no administrator rights, and nothing written to
+ * the host machine's registry. Anything else still goes to the real API.
+ */
+#define FAKE_HKEY_BASE 0xE9000000u
+#define GTA_REG_ROOT     "SOFTWARE\\DMA Design\\Grand Theft Auto"
+#define GTA_REG_CONTROLS "SOFTWARE\\DMA Design\\Grand Theft Auto\\Controls"
+
+static const char *k_fake_keys[] = { GTA_REG_ROOT, GTA_REG_CONTROLS };
+#define NUM_FAKE_KEYS ((int)(sizeof(k_fake_keys) / sizeof(k_fake_keys[0])))
+
+/* Defaults the game will accept. Language 0 is English; the control bindings
+ * are left at 0 -- GTA Settings.exe is what normally populates them, and the
+ * game only requires the reads to succeed. */
+static u32 g_reg_language;
+static u32 g_reg_controls[10];
+
+static int fake_key_index(u32 hkey) {
+    u32 i = hkey - FAKE_HKEY_BASE;
+    return (hkey >= FAKE_HKEY_BASE && i < (u32)NUM_FAKE_KEYS) ? (int)i : -1;
+}
+
+static void bridge_RegOpenKeyExA(void) {
+    const char *sub = ARG(2) ? VA2STR(ARG(2)) : "";
+    int i;
+    for (i = 0; i < NUM_FAKE_KEYS; i++) {
+        if (!_stricmp(sub, k_fake_keys[i])) {
+            if (ARG(5)) MEM32(ARG(5)) = FAKE_HKEY_BASE + (u32)i;
+            fprintf(stderr, "    RegOpenKeyExA('%s') -> synthetic\n", sub);
+            eax = ERROR_SUCCESS;
+            esp += 4+20;
+            return;
+        }
+    }
+    eax = RegOpenKeyExA((HKEY)(uintptr_t)ARG(1), sub, ARG(3), ARG(4), (PHKEY)VA2PTR(ARG(5)));
+    esp += 4+20;
+}
+
+static void bridge_RegQueryValueExA(void) {
+    int key = fake_key_index(ARG(1));
+    if (key >= 0) {
+        const char *name = ARG(2) ? VA2STR(ARG(2)) : "";
+        u32 value = 0;
+        if (key == 1 && !strncmp(name, "Control ", 8)) {
+            int n = name[8] - '0';
+            if (n >= 0 && n < 10) value = g_reg_controls[n];
+        } else if (!_stricmp(name, "Language")) {
+            value = g_reg_language;
+        }
+        if (ARG(4)) MEM32(ARG(4)) = REG_DWORD;
+        if (ARG(5)) MEM32(ARG(5)) = value;
+        if (ARG(6)) MEM32(ARG(6)) = 4;
+        eax = ERROR_SUCCESS;
+        esp += 4+24;
+        return;
+    }
+    eax = RegQueryValueExA((HKEY)(uintptr_t)ARG(1), VA2STR(ARG(2)), NULL,
+                           ARG(4)?VA2PTR(ARG(4)):NULL, ARG(5)?VA2PTR(ARG(5)):NULL,
+                           ARG(6)?VA2PTR(ARG(6)):NULL);
+    esp += 4+24;
+}
+
+static void bridge_RegSetValueExA(void) {
+    int key = fake_key_index(ARG(1));
+    if (key >= 0) {
+        const char *name = ARG(2) ? VA2STR(ARG(2)) : "";
+        u32 value = (ARG(5) && ARG(6) >= 4) ? MEM32(ARG(5)) : 0;
+        if (key == 1 && !strncmp(name, "Control ", 8)) {
+            int n = name[8] - '0';
+            if (n >= 0 && n < 10) g_reg_controls[n] = value;
+        } else if (!_stricmp(name, "Language")) {
+            g_reg_language = value;
+        }
+        eax = ERROR_SUCCESS;
+        esp += 4+24;
+        return;
+    }
+    eax = RegSetValueExA((HKEY)(uintptr_t)ARG(1), VA2STR(ARG(2)), 0, ARG(4),
+                         (const BYTE*)VA2PTR(ARG(5)), ARG(6));
+    esp += 4+24;
+}
+
+static void bridge_RegCloseKey(void) {
+    if (fake_key_index(ARG(1)) >= 0) { eax = ERROR_SUCCESS; esp += 4+4; return; }
+    eax = RegCloseKey((HKEY)(uintptr_t)ARG(1));
+    esp += 4+4;
+}
 
 /* ===== WINMM bridges ===== */
 static void bridge_joyGetPosEx(void) { eax = joyGetPosEx(ARG(1),(JOYINFOEX*)VA2PTR(ARG(2))); esp += 4+8; }
@@ -463,12 +697,15 @@ static void bridge_SmackDoFrame(void) { eax=SmackDoFrame((HSMACK)(uintptr_t)ARG(
 static void bridge_SmackNextFrame(void) { eax=SmackNextFrame((HSMACK)(uintptr_t)ARG(1)); esp += 4+4; }
 static void bridge_SmackWait(void) { eax=SmackWait((HSMACK)(uintptr_t)ARG(1)); esp += 4+4; }
 static void bridge_SmackToBuffer(void) { esp += 4+28; }
-static void bridge_SmackSoundUseDirectSound(void) { esp += 4+4; }
-static void bridge_SmackBufferOpen(void) { eax=1; esp += 4+24; }
+/* ordinal 33 is SmackSoundUseMSS(1), not SmackSoundUseDirectSound. */
+static void bridge_SmackSoundUseMSS(void) { esp += 4+4; }
+/* ordinal 28 is SmackToBufferRect(2); ordinal 23 is the 7-arg SmackToBuffer. */
+static void bridge_SmackToBufferRect(void) { eax=1; esp += 4+8; }
 
 /* ===== DPLAYX bridges ===== */
-static void bridge_dplay_stub1(void) { eax=0x80004005; esp += 4+4; }
-static void bridge_dplay_stub2(void) { eax=0x80004005; esp += 4+4; }
+/* dplayx ordinals 1 and 2: DirectPlayCreate(3) / DirectPlayEnumerate(2). */
+static void bridge_dplay_create(void) { eax=0x80004005; esp += 4+12; }
+static void bridge_dplay_enumerate(void) { eax=0x80004005; esp += 4+8; }
 
 #endif /* _WIN32 */
 
@@ -478,189 +715,195 @@ void setup_iat_bridges(void) {
     fprintf(stderr, "Setting up IAT bridges...\n");
 
     /* KERNEL32.dll (63 functions) */
-    register_bridge(0x4A7074, "HeapReAlloc", bridge_HeapReAlloc);
-    register_bridge(0x4A7078, "VirtualAlloc", bridge_VirtualAlloc);
-    register_bridge(0x4A707C, "VirtualFree", bridge_VirtualFree);
-    register_bridge(0x4A7080, "HeapCreate", bridge_HeapCreate);
-    register_bridge(0x4A7084, "HeapDestroy", bridge_HeapDestroy);
-    register_bridge(0x4A7088, "GetVersionExA", bridge_GetVersionExA);
-    register_bridge(0x4A708C, "IsBadWritePtr", bridge_IsBadWritePtr);
-    register_bridge(0x4A7090, "GetEnvironmentVariableA", bridge_GetEnvironmentVariableA);
-    register_bridge(0x4A7094, "GetModuleFileNameA", bridge_GetModuleFileNameA);
-    register_bridge(0x4A7098, "ReadFile", bridge_ReadFile);
-    register_bridge(0x4A709C, "WriteFile", bridge_WriteFile);
-    register_bridge(0x4A70A0, "CloseHandle", bridge_CloseHandle);
-    register_bridge(0x4A70A4, "GetCommandLineA", bridge_GetCommandLineA);
-    register_bridge(0x4A70A8, "GetStartupInfoA", bridge_GetStartupInfoA);
-    register_bridge(0x4A70AC, "HeapAlloc", bridge_HeapAlloc);
-    register_bridge(0x4A70B0, "HeapFree", bridge_HeapFree);
-    register_bridge(0x4A70B4, "GetStdHandle", bridge_GetStdHandle);
-    register_bridge(0x4A70B8, "TerminateProcess", bridge_TerminateProcess);
-    register_bridge(0x4A70BC, "GetOEMCP", bridge_GetOEMCP);
-    register_bridge(0x4A70C0, "SetHandleCount", bridge_SetHandleCount);
-    register_bridge(0x4A70C4, "SetFilePointer", bridge_SetFilePointer);
-    register_bridge(0x4A70C8, "ReleaseMutex", bridge_ReleaseMutex);
-    register_bridge(0x4A70CC, "Sleep", bridge_Sleep);
-    register_bridge(0x4A70D0, "GetLastError", bridge_GetLastError);
-    register_bridge(0x4A70D4, "CreateMutexA", bridge_CreateMutexA);
-    register_bridge(0x4A70D8, "LoadLibraryA", bridge_LoadLibraryA);
-    register_bridge(0x4A70DC, "GetProcAddress", bridge_GetProcAddress);
-    register_bridge(0x4A70E0, "GetVersion", bridge_GetVersion);
-    register_bridge(0x4A70E4, "FindClose", bridge_FindClose);
-    register_bridge(0x4A70E8, "FindFirstFileA", bridge_FindFirstFileA);
-    register_bridge(0x4A70EC, "GetSystemDirectoryA", bridge_GetSystemDirectoryA);
-    register_bridge(0x4A70F0, "GetModuleHandleA", bridge_GetModuleHandleA);
-    register_bridge(0x4A70F4, "GetLocalTime", bridge_GetLocalTime);
-    register_bridge(0x4A70F8, "GetTimeZoneInformation", bridge_GetTimeZoneInformation);
-    register_bridge(0x4A70FC, "SetEnvironmentVariableA", bridge_SetEnvironmentVariableA);
-    register_bridge(0x4A7100, "LCMapStringA", bridge_LCMapStringA);
-    register_bridge(0x4A7104, "LCMapStringW", bridge_LCMapStringW);
-    register_bridge(0x4A7108, "SetEndOfFile", bridge_SetEndOfFile);
-    register_bridge(0x4A710C, "GetFileType", bridge_GetFileType);
-    register_bridge(0x4A7110, "WideCharToMultiByte", bridge_WideCharToMultiByte);
-    register_bridge(0x4A7114, "UnhandledExceptionFilter", bridge_UnhandledExceptionFilter);
-    register_bridge(0x4A7118, "FreeEnvironmentStringsA", bridge_FreeEnvironmentStringsA);
-    register_bridge(0x4A711C, "FreeEnvironmentStringsW", bridge_FreeEnvironmentStringsW);
-    register_bridge(0x4A7120, "GetEnvironmentStrings", bridge_GetEnvironmentStrings);
-    register_bridge(0x4A7124, "GetEnvironmentStringsW", bridge_GetEnvironmentStringsW);
-    register_bridge(0x4A7128, "FlushFileBuffers", bridge_FlushFileBuffers);
-    register_bridge(0x4A712C, "SetUnhandledExceptionFilter", bridge_SetUnhandledExceptionFilter);
-    register_bridge(0x4A7130, "IsBadReadPtr", bridge_IsBadReadPtr);
-    register_bridge(0x4A7134, "IsBadCodePtr", bridge_IsBadCodePtr);
-    register_bridge(0x4A7138, "SetStdHandle", bridge_SetStdHandle);
-    register_bridge(0x4A713C, "CreateFileA", bridge_CreateFileA);
-    register_bridge(0x4A7140, "MultiByteToWideChar", bridge_MultiByteToWideChar);
-    register_bridge(0x4A7144, "GetStringTypeA", bridge_GetStringTypeA);
-    register_bridge(0x4A7148, "GetStringTypeW", bridge_GetStringTypeW);
-    register_bridge(0x4A714C, "GetCPInfo", bridge_GetCPInfo);
-    register_bridge(0x4A7150, "GetACP", bridge_GetACP);
-    register_bridge(0x4A7154, "CompareStringA", bridge_CompareStringA);
-    register_bridge(0x4A7158, "CompareStringW", bridge_CompareStringW);
-    register_bridge(0x4A715C, "ExitProcess", bridge_ExitProcess);
-    register_bridge(0x4A7160, "GetCurrentProcess", bridge_GetCurrentProcess);
-    register_bridge(0x4A7164, "GetSystemTime", bridge_GetSystemTime);
-    register_bridge(0x4A7168, "GetSystemTimeAsFileTime", bridge_GetSystemTimeAsFileTime);
-    register_bridge(0x4A716C, "RtlUnwind", bridge_RtlUnwind);
+    register_bridge("HeapReAlloc", bridge_HeapReAlloc);
+    register_bridge("VirtualAlloc", bridge_VirtualAlloc);
+    register_bridge("VirtualFree", bridge_VirtualFree);
+    register_bridge("HeapCreate", bridge_HeapCreate);
+    register_bridge("HeapDestroy", bridge_HeapDestroy);
+    register_bridge("GetVersionExA", bridge_GetVersionExA);
+    register_bridge("IsBadWritePtr", bridge_IsBadWritePtr);
+    register_bridge("GetEnvironmentVariableA", bridge_GetEnvironmentVariableA);
+    register_bridge("GetModuleFileNameA", bridge_GetModuleFileNameA);
+    register_bridge("ReadFile", bridge_ReadFile);
+    register_bridge("WriteFile", bridge_WriteFile);
+    register_bridge("CloseHandle", bridge_CloseHandle);
+    register_bridge("GetCommandLineA", bridge_GetCommandLineA);
+    register_bridge("GetStartupInfoA", bridge_GetStartupInfoA);
+    register_bridge("HeapAlloc", bridge_HeapAlloc);
+    register_bridge("HeapFree", bridge_HeapFree);
+    register_bridge("GetStdHandle", bridge_GetStdHandle);
+    register_bridge("TerminateProcess", bridge_TerminateProcess);
+    register_bridge("GetOEMCP", bridge_GetOEMCP);
+    register_bridge("SetHandleCount", bridge_SetHandleCount);
+    register_bridge("SetFilePointer", bridge_SetFilePointer);
+    register_bridge("ReleaseMutex", bridge_ReleaseMutex);
+    register_bridge("Sleep", bridge_Sleep);
+    register_bridge("GetLastError", bridge_GetLastError);
+    register_bridge("CreateMutexA", bridge_CreateMutexA);
+    register_bridge("LoadLibraryA", bridge_LoadLibraryA);
+    register_bridge("GetProcAddress", bridge_GetProcAddress);
+    register_bridge("GetVersion", bridge_GetVersion);
+    register_bridge("FindClose", bridge_FindClose);
+    register_bridge("FindFirstFileA", bridge_FindFirstFileA);
+    register_bridge("GetSystemDirectoryA", bridge_GetSystemDirectoryA);
+    register_bridge("GetModuleHandleA", bridge_GetModuleHandleA);
+    register_bridge("GetLocalTime", bridge_GetLocalTime);
+    register_bridge("GetTimeZoneInformation", bridge_GetTimeZoneInformation);
+    register_bridge("SetEnvironmentVariableA", bridge_SetEnvironmentVariableA);
+    register_bridge("LCMapStringA", bridge_LCMapStringA);
+    register_bridge("LCMapStringW", bridge_LCMapStringW);
+    register_bridge("SetEndOfFile", bridge_SetEndOfFile);
+    register_bridge("GetFileType", bridge_GetFileType);
+    register_bridge("WideCharToMultiByte", bridge_WideCharToMultiByte);
+    register_bridge("UnhandledExceptionFilter", bridge_UnhandledExceptionFilter);
+    register_bridge("FreeEnvironmentStringsA", bridge_FreeEnvironmentStringsA);
+    register_bridge("FreeEnvironmentStringsW", bridge_FreeEnvironmentStringsW);
+    register_bridge("GetEnvironmentStrings", bridge_GetEnvironmentStrings);
+    register_bridge("GetEnvironmentStringsW", bridge_GetEnvironmentStringsW);
+    register_bridge("FlushFileBuffers", bridge_FlushFileBuffers);
+    register_bridge("SetUnhandledExceptionFilter", bridge_SetUnhandledExceptionFilter);
+    register_bridge("IsBadReadPtr", bridge_IsBadReadPtr);
+    register_bridge("IsBadCodePtr", bridge_IsBadCodePtr);
+    register_bridge("SetStdHandle", bridge_SetStdHandle);
+    register_bridge("CreateFileA", bridge_CreateFileA);
+    register_bridge("MultiByteToWideChar", bridge_MultiByteToWideChar);
+    register_bridge("GetStringTypeA", bridge_GetStringTypeA);
+    register_bridge("GetStringTypeW", bridge_GetStringTypeW);
+    register_bridge("GetCPInfo", bridge_GetCPInfo);
+    register_bridge("GetACP", bridge_GetACP);
+    register_bridge("CompareStringA", bridge_CompareStringA);
+    register_bridge("CompareStringW", bridge_CompareStringW);
+    register_bridge("ExitProcess", bridge_ExitProcess);
+    register_bridge("GetCurrentProcess", bridge_GetCurrentProcess);
+    register_bridge("GetSystemTime", bridge_GetSystemTime);
+    register_bridge("GetSystemTimeAsFileTime", bridge_GetSystemTimeAsFileTime);
+    register_bridge("RtlUnwind", bridge_RtlUnwind);
 
     /* USER32.dll (29 functions) */
-    register_bridge(0x4A7174, "LoadStringA", bridge_LoadStringA);
-    register_bridge(0x4A7178, "MessageBoxA", bridge_MessageBoxA);
-    register_bridge(0x4A717C, "DestroyWindow", bridge_DestroyWindow);
-    register_bridge(0x4A7180, "EnableWindow", bridge_EnableWindow);
-    register_bridge(0x4A7184, "SetActiveWindow", bridge_SetActiveWindow);
-    register_bridge(0x4A7188, "SetForegroundWindow", bridge_SetForegroundWindow);
-    register_bridge(0x4A718C, "SetCursor", bridge_SetCursor);
-    register_bridge(0x4A7190, "LoadCursorA", bridge_LoadCursorA);
-    register_bridge(0x4A7194, "LoadIconA", bridge_LoadIconA);
-    register_bridge(0x4A7198, "RegisterClassA", bridge_RegisterClassA);
-    register_bridge(0x4A719C, "CreateWindowExA", bridge_CreateWindowExA);
-    register_bridge(0x4A71A0, "ShowWindow", bridge_ShowWindow);
-    register_bridge(0x4A71A4, "UpdateWindow", bridge_UpdateWindow);
-    register_bridge(0x4A71A8, "GetClientRect", bridge_GetClientRect);
-    register_bridge(0x4A71AC, "GetDC", bridge_GetDC);
-    register_bridge(0x4A71B0, "ReleaseDC", bridge_ReleaseDC);
-    register_bridge(0x4A71B4, "GetAsyncKeyState", bridge_GetAsyncKeyState);
-    register_bridge(0x4A71B8, "GetKeyState", bridge_GetKeyState);
-    register_bridge(0x4A71BC, "SetTimer", bridge_SetTimer);
-    register_bridge(0x4A71C0, "KillTimer", bridge_KillTimer);
-    register_bridge(0x4A71C4, "PeekMessageA", bridge_PeekMessageA);
-    register_bridge(0x4A71C8, "TranslateMessage", bridge_TranslateMessage);
-    register_bridge(0x4A71CC, "DispatchMessageA", bridge_DispatchMessageA);
-    register_bridge(0x4A71D0, "PostQuitMessage", bridge_PostQuitMessage);
-    register_bridge(0x4A71D4, "DefWindowProcA", bridge_DefWindowProcA);
-    register_bridge(0x4A71D8, "GetActiveWindow", bridge_GetActiveWindow);
-    register_bridge(0x4A71DC, "GetWindowPlacement", bridge_GetWindowPlacement);
-    register_bridge(0x4A71E0, "SetWindowPos", bridge_SetWindowPos);
-    register_bridge(0x4A71E4, "GetCursorPos", bridge_GetCursorPos);
-    register_bridge(0x4A71E8, "SetCursorPos", bridge_SetCursorPos);
+    register_bridge("LoadStringA", bridge_LoadStringA);
+    register_bridge("MessageBoxA", bridge_MessageBoxA);
+    register_bridge("DestroyWindow", bridge_DestroyWindow);
+    register_bridge("SetFocus", bridge_SetFocus);
+    register_bridge("SetWindowLongA", bridge_SetWindowLongA);
+    register_bridge("PostMessageA", bridge_PostMessageA);
+    register_bridge("ShowCursor", bridge_ShowCursor);
+    register_bridge("SetWindowPlacement", bridge_SetWindowPlacement);
+    register_bridge("EnableWindow", bridge_EnableWindow);
+    register_bridge("SetActiveWindow", bridge_SetActiveWindow);
+    register_bridge("SetForegroundWindow", bridge_SetForegroundWindow);
+    register_bridge("SetCursor", bridge_SetCursor);
+    register_bridge("LoadCursorA", bridge_LoadCursorA);
+    register_bridge("LoadIconA", bridge_LoadIconA);
+    register_bridge("RegisterClassA", bridge_RegisterClassA);
+    register_bridge("CreateWindowExA", bridge_CreateWindowExA);
+    register_bridge("ShowWindow", bridge_ShowWindow);
+    register_bridge("UpdateWindow", bridge_UpdateWindow);
+    register_bridge("GetClientRect", bridge_GetClientRect);
+    register_bridge("GetDC", bridge_GetDC);
+    register_bridge("ReleaseDC", bridge_ReleaseDC);
+    register_bridge("GetAsyncKeyState", bridge_GetAsyncKeyState);
+    register_bridge("GetKeyState", bridge_GetKeyState);
+    register_bridge("SetTimer", bridge_SetTimer);
+    register_bridge("KillTimer", bridge_KillTimer);
+    register_bridge("PeekMessageA", bridge_PeekMessageA);
+    register_bridge("TranslateMessage", bridge_TranslateMessage);
+    register_bridge("DispatchMessageA", bridge_DispatchMessageA);
+    register_bridge("PostQuitMessage", bridge_PostQuitMessage);
+    register_bridge("DefWindowProcA", bridge_DefWindowProcA);
+    register_bridge("GetActiveWindow", bridge_GetActiveWindow);
+    register_bridge("GetWindowPlacement", bridge_GetWindowPlacement);
+    register_bridge("SetWindowPos", bridge_SetWindowPos);
+    register_bridge("GetCursorPos", bridge_GetCursorPos);
+    register_bridge("SetCursorPos", bridge_SetCursorPos);
 
     /* GDI32.dll (20 functions) */
-    register_bridge(0x4A7024, "GetDeviceCaps", bridge_GetDeviceCaps);
-    register_bridge(0x4A7038, "CreateCompatibleDC", bridge_CreateCompatibleDC);
-    register_bridge(0x4A7034, "DeleteDC", bridge_DeleteDC);
-    register_bridge(0x4A7030, "SelectObject", bridge_SelectObject);
-    register_bridge(0x4A703C, "DeleteObject", bridge_DeleteObject);
-    register_bridge(0x4A7040, "CreatePalette", bridge_CreatePalette);
-    register_bridge(0x4A7028, "SelectPalette", bridge_SelectPalette);
-    register_bridge(0x4A702C, "RealizePalette", bridge_RealizePalette);
-    register_bridge(0x4A7060, "BitBlt", bridge_BitBlt);
-    register_bridge(0x4A7058, "CreateCompatibleBitmap", bridge_CreateCompatibleBitmap);
-    register_bridge(0x4A706C, "GetStockObject", bridge_GetStockObject);
-    register_bridge(0x4A7020, "SetSystemPaletteUse", bridge_gdi_stub);
-    register_bridge(0x4A7044, "GetSystemPaletteUse", bridge_gdi_stub);
-    register_bridge(0x4A7048, "GetSystemPaletteEntries", bridge_gdi_stub);
-    register_bridge(0x4A704C, "CreateDCA", bridge_gdi_stub);
-    register_bridge(0x4A7050, "Escape", bridge_gdi_stub);
-    register_bridge(0x4A7054, "GetDIBits", bridge_gdi_stub);
-    register_bridge(0x4A705C, "AnimatePalette", bridge_gdi_stub);
-    register_bridge(0x4A7064, "StretchBlt", bridge_gdi_stub);
-    register_bridge(0x4A7068, "SetStretchBltMode", bridge_gdi_stub);
+    register_bridge("GetDeviceCaps", bridge_GetDeviceCaps);
+    register_bridge("CreateCompatibleDC", bridge_CreateCompatibleDC);
+    register_bridge("DeleteDC", bridge_DeleteDC);
+    register_bridge("SelectObject", bridge_SelectObject);
+    register_bridge("DeleteObject", bridge_DeleteObject);
+    register_bridge("CreatePalette", bridge_CreatePalette);
+    register_bridge("SelectPalette", bridge_SelectPalette);
+    register_bridge("RealizePalette", bridge_RealizePalette);
+    register_bridge("BitBlt", bridge_BitBlt);
+    register_bridge("CreateCompatibleBitmap", bridge_CreateCompatibleBitmap);
+    register_bridge("GetStockObject", bridge_GetStockObject);
+    register_bridge("SetSystemPaletteUse", bridge_SetSystemPaletteUse);
+    register_bridge("GetSystemPaletteUse", bridge_GetSystemPaletteUse);
+    register_bridge("GetSystemPaletteEntries", bridge_GetSystemPaletteEntries);
+    register_bridge("CreateDCA", bridge_CreateDCA);
+    register_bridge("Escape", bridge_Escape);
+    register_bridge("GetDIBits", bridge_GetDIBits);
+    register_bridge("AnimatePalette", bridge_AnimatePalette);
+    register_bridge("StretchBlt", bridge_StretchBlt);
+    register_bridge("SetStretchBltMode", bridge_SetStretchBltMode);
 
     /* ADVAPI32.dll (4 functions) */
-    register_bridge(0x4A7000, "RegCloseKey", bridge_RegCloseKey);
-    register_bridge(0x4A7004, "RegQueryValueExA", bridge_RegQueryValueExA);
-    register_bridge(0x4A7008, "RegOpenKeyExA", bridge_RegOpenKeyExA);
-    register_bridge(0x4A700C, "RegSetValueExA", bridge_RegSetValueExA);
+    register_bridge("RegCloseKey", bridge_RegCloseKey);
+    register_bridge("RegQueryValueExA", bridge_RegQueryValueExA);
+    register_bridge("RegOpenKeyExA", bridge_RegOpenKeyExA);
+    register_bridge("RegSetValueExA", bridge_RegSetValueExA);
 
     /* WINMM.dll (2 functions) */
-    register_bridge(0x4A71EC, "joyGetPosEx", bridge_joyGetPosEx);
-    register_bridge(0x4A71F0, "joyGetDevCapsA", bridge_joyGetDevCapsA);
+    register_bridge("joyGetPosEx", bridge_joyGetPosEx);
+    register_bridge("joyGetDevCapsA", bridge_joyGetDevCapsA);
 
     /* DPLAYX.dll (2 functions) */
-    register_bridge(0x4A7014, "DirectPlayCreate", bridge_dplay_stub1);
-    register_bridge(0x4A7018, "DirectPlayEnumerate", bridge_dplay_stub2);
+    register_bridge("ordinal_1", bridge_dplay_create);
+    register_bridge("ordinal_2", bridge_dplay_enumerate);
 
     /* mss32.dll (38 functions) */
-    register_bridge(0x4A71F8, "AIL_stream_position", bridge_AIL_stream_position);
-    register_bridge(0x4A71FC, "AIL_set_digital_master_volume", bridge_AIL_set_digital_master_volume);
-    register_bridge(0x4A7200, "AIL_shutdown", bridge_AIL_shutdown);
-    register_bridge(0x4A7204, "AIL_release_sample_handle", bridge_AIL_release_sample_handle);
-    register_bridge(0x4A7208, "AIL_close_stream", bridge_AIL_close_stream);
-    register_bridge(0x4A720C, "AIL_stream_info", bridge_AIL_stream_info);
-    register_bridge(0x4A7210, "AIL_open_stream", bridge_AIL_open_stream);
-    register_bridge(0x4A7214, "AIL_pause_stream", bridge_AIL_pause_stream);
-    register_bridge(0x4A7218, "AIL_startup", bridge_AIL_startup);
-    register_bridge(0x4A721C, "AIL_set_stream_loop_count", bridge_AIL_set_stream_loop_count);
-    register_bridge(0x4A7220, "AIL_stop_timer", bridge_AIL_stop_timer);
-    register_bridge(0x4A7224, "AIL_release_timer_handle", bridge_AIL_release_timer_handle);
-    register_bridge(0x4A7228, "AIL_register_timer", bridge_AIL_register_timer);
-    register_bridge(0x4A722C, "AIL_set_timer_frequency", bridge_AIL_set_timer_frequency);
-    register_bridge(0x4A7230, "AIL_start_timer", bridge_AIL_start_timer);
-    register_bridge(0x4A7234, "AIL_sample_status", bridge_AIL_sample_status);
-    register_bridge(0x4A7238, "AIL_end_sample", bridge_AIL_end_sample);
-    register_bridge(0x4A723C, "AIL_start_sample", bridge_AIL_start_sample);
-    register_bridge(0x4A7240, "AIL_set_sample_address", bridge_AIL_set_sample_address);
-    register_bridge(0x4A7244, "AIL_set_sample_pan", bridge_AIL_set_sample_pan);
-    register_bridge(0x4A7248, "AIL_set_sample_playback_rate", bridge_AIL_set_sample_playback_rate);
-    register_bridge(0x4A724C, "AIL_init_sample", bridge_AIL_init_sample);
-    register_bridge(0x4A7250, "AIL_ms_count", bridge_AIL_ms_count);
-    register_bridge(0x4A7254, "AIL_start_stream", bridge_AIL_start_stream);
-    register_bridge(0x4A7258, "AIL_set_stream_position", bridge_AIL_set_stream_position);
-    register_bridge(0x4A725C, "AIL_set_preference", bridge_AIL_set_preference);
-    register_bridge(0x4A7260, "AIL_waveOutOpen", bridge_AIL_waveOutOpen);
-    register_bridge(0x4A7264, "AIL_digital_configuration", bridge_AIL_digital_configuration);
-    register_bridge(0x4A7268, "AIL_waveOutClose", bridge_AIL_waveOutClose);
-    register_bridge(0x4A726C, "AIL_allocate_sample_handle", bridge_AIL_allocate_sample_handle);
-    register_bridge(0x4A7270, "AIL_mem_free_lock", bridge_AIL_mem_free_lock);
-    register_bridge(0x4A7274, "AIL_set_sample_type", bridge_AIL_set_sample_type);
-    register_bridge(0x4A7278, "AIL_set_sample_volume", bridge_AIL_set_sample_volume);
-    register_bridge(0x4A727C, "AIL_set_sample_loop_count", bridge_AIL_set_sample_loop_count);
-    register_bridge(0x4A7280, "AIL_mem_alloc_lock", bridge_AIL_mem_alloc_lock);
-    register_bridge(0x4A7284, "AIL_service_stream", bridge_AIL_service_stream);
-    register_bridge(0x4A7288, "AIL_stream_status", bridge_AIL_stream_status);
-    register_bridge(0x4A728C, "AIL_set_stream_volume", bridge_AIL_set_stream_volume);
+    register_bridge("AIL_stream_position", bridge_AIL_stream_position);
+    register_bridge("AIL_set_digital_master_volume", bridge_AIL_set_digital_master_volume);
+    register_bridge("AIL_shutdown", bridge_AIL_shutdown);
+    register_bridge("AIL_release_sample_handle", bridge_AIL_release_sample_handle);
+    register_bridge("AIL_close_stream", bridge_AIL_close_stream);
+    register_bridge("AIL_stream_info", bridge_AIL_stream_info);
+    register_bridge("AIL_open_stream", bridge_AIL_open_stream);
+    register_bridge("AIL_pause_stream", bridge_AIL_pause_stream);
+    register_bridge("AIL_startup", bridge_AIL_startup);
+    register_bridge("AIL_set_stream_loop_count", bridge_AIL_set_stream_loop_count);
+    register_bridge("AIL_stop_timer", bridge_AIL_stop_timer);
+    register_bridge("AIL_release_timer_handle", bridge_AIL_release_timer_handle);
+    register_bridge("AIL_register_timer", bridge_AIL_register_timer);
+    register_bridge("AIL_set_timer_frequency", bridge_AIL_set_timer_frequency);
+    register_bridge("AIL_start_timer", bridge_AIL_start_timer);
+    register_bridge("AIL_sample_status", bridge_AIL_sample_status);
+    register_bridge("AIL_end_sample", bridge_AIL_end_sample);
+    register_bridge("AIL_start_sample", bridge_AIL_start_sample);
+    register_bridge("AIL_set_sample_address", bridge_AIL_set_sample_address);
+    register_bridge("AIL_set_sample_pan", bridge_AIL_set_sample_pan);
+    register_bridge("AIL_set_sample_playback_rate", bridge_AIL_set_sample_playback_rate);
+    register_bridge("AIL_init_sample", bridge_AIL_init_sample);
+    register_bridge("AIL_ms_count", bridge_AIL_ms_count);
+    register_bridge("AIL_start_stream", bridge_AIL_start_stream);
+    register_bridge("AIL_set_stream_position", bridge_AIL_set_stream_position);
+    register_bridge("AIL_set_preference", bridge_AIL_set_preference);
+    register_bridge("AIL_waveOutOpen", bridge_AIL_waveOutOpen);
+    register_bridge("AIL_digital_configuration", bridge_AIL_digital_configuration);
+    register_bridge("AIL_waveOutClose", bridge_AIL_waveOutClose);
+    register_bridge("AIL_allocate_sample_handle", bridge_AIL_allocate_sample_handle);
+    register_bridge("AIL_mem_free_lock", bridge_AIL_mem_free_lock);
+    register_bridge("AIL_set_sample_type", bridge_AIL_set_sample_type);
+    register_bridge("AIL_set_sample_volume", bridge_AIL_set_sample_volume);
+    register_bridge("AIL_set_sample_loop_count", bridge_AIL_set_sample_loop_count);
+    register_bridge("AIL_mem_alloc_lock", bridge_AIL_mem_alloc_lock);
+    register_bridge("AIL_service_stream", bridge_AIL_service_stream);
+    register_bridge("AIL_stream_status", bridge_AIL_stream_status);
+    register_bridge("AIL_set_stream_volume", bridge_AIL_set_stream_volume);
 
     /* smackw32.dll (8 functions) */
-    register_bridge(0x4A7294, "SmackNextFrame", bridge_SmackNextFrame);
-    register_bridge(0x4A7298, "SmackDoFrame", bridge_SmackDoFrame);
-    register_bridge(0x4A729C, "SmackSoundUseDirectSound", bridge_SmackSoundUseDirectSound);
-    register_bridge(0x4A72A0, "SmackToBuffer", bridge_SmackToBuffer);
-    register_bridge(0x4A72A4, "SmackWait", bridge_SmackWait);
-    register_bridge(0x4A72A8, "SmackClose", bridge_SmackClose);
-    register_bridge(0x4A72AC, "SmackOpen", bridge_SmackOpen);
-    register_bridge(0x4A72B0, "SmackBufferOpen", bridge_SmackBufferOpen);
+    register_bridge("ordinal_21", bridge_SmackNextFrame);
+    register_bridge("ordinal_19", bridge_SmackDoFrame);
+    register_bridge("ordinal_33", bridge_SmackSoundUseMSS);
+    register_bridge("ordinal_23", bridge_SmackToBuffer);
+    register_bridge("ordinal_32", bridge_SmackWait);
+    register_bridge("ordinal_18", bridge_SmackClose);
+    register_bridge("ordinal_14", bridge_SmackOpen);
+    register_bridge("ordinal_28", bridge_SmackToBufferRect);
 
     ddraw_shim_init();
+    report_unbridged();
     fprintf(stderr, "  Registered %d IAT bridges (all 166 imports covered)\n", num_bridges);
 #endif
 }
