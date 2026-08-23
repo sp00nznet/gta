@@ -20,6 +20,7 @@ typedef struct {
     const unsigned char *pcm;
     u32   bytes;
     int   rate, bits, channels;
+    int   is_signed;   /* 8-bit only */
     int   volume, pan;
     int   loop;          /* remaining plays; <= 0 means forever */
     u32   pos;           /* frame position, 16.16 fixed point */
@@ -32,6 +33,10 @@ static int   g_master = 127;
 static int   g_running;
 static int   g_trace;
 static int   g_peak;
+static int   g_mute;
+static FILE *g_dump;
+static u32   g_dump_bytes;
+static int   g_final_shutdown;
 
 #ifdef _WIN32
 static HWAVEOUT   g_dev;
@@ -55,8 +60,11 @@ static void fetch(const Voice *v, u32 frame, int *l, int *r) {
     if (v->bits == 16) {
         a = ((const short *)p)[0];
         b = v->channels == 2 ? ((const short *)p)[1] : a;
+    } else if (v->is_signed) {
+        a = (int)(signed char)p[0] << 8;
+        b = v->channels == 2 ? ((int)(signed char)p[1] << 8) : a;
     } else {
-        a = ((int)p[0] - 128) << 8;               /* Miles 8-bit is unsigned */
+        a = ((int)p[0] - 128) << 8;               /* offset binary */
         b = v->channels == 2 ? (((int)p[1] - 128) << 8) : a;
     }
     *l = a;
@@ -109,8 +117,20 @@ static void mix_into(short *out, int frames) {
     }
     UNLOCK();
 
+    if (g_dump) {
+        short w[FRAMES_PER_BUF * MIXER_CHANNELS];
+        for (i = 0; i < frames * MIXER_CHANNELS; i++) {
+            int s = acc[i];
+            if (s >  32767) s =  32767;
+            if (s < -32768) s = -32768;
+            w[i] = (short)s;
+        }
+        fwrite(w, sizeof(short), (size_t)frames * MIXER_CHANNELS, g_dump);
+        g_dump_bytes += (u32)(frames * MIXER_CHANNELS * (int)sizeof(short));
+    }
+
     for (i = 0; i < frames * MIXER_CHANNELS; i++) {
-        int s = acc[i];
+        int s = g_mute ? 0 : acc[i];
         if (s >  32767) s =  32767;
         if (s < -32768) s = -32768;
         out[i] = (short)s;
@@ -123,7 +143,7 @@ static void mix_into(short *out, int frames) {
         static int ticks;
         int peak = 0, live = 0;
         for (i = 0; i < frames * MIXER_CHANNELS; i++) {
-            int a = out[i] < 0 ? -out[i] : out[i];
+            int a = acc[i] < 0 ? -acc[i] : acc[i];
             if (a > peak) peak = a;
         }
         for (i = 0; i < MIXER_VOICES; i++) if (g_voice[i].playing) live++;
@@ -186,7 +206,27 @@ int mixer_init(void) {
         waveOutPrepareHeader(g_dev, &g_hdr[i], sizeof(WAVEHDR));
     }
 
-    { char b[8]; g_trace = GetEnvironmentVariableA("GTA_AUDIO_TRACE", b, sizeof(b)) ? 1 : 0; }
+    { char b[8];
+      g_trace = GetEnvironmentVariableA("GTA_AUDIO_TRACE", b, sizeof(b)) ? 1 : 0;
+      g_mute  = GetEnvironmentVariableA("GTA_AUDIO_MUTE", b, sizeof(b)) ? 1 : 0;
+      if (g_mute) fprintf(stderr, "  MIXER: muted (GTA_AUDIO_MUTE)\n"); }
+    { static int dump_tried; char path[260];
+      if (!dump_tried && GetEnvironmentVariableA("GTA_AUDIO_DUMP", path, sizeof(path))) {
+          dump_tried = 1;
+          g_dump = fopen(path, "wb");
+          if (g_dump) {
+              unsigned char h[44];
+              memset(h, 0, sizeof(h));
+              memcpy(h, "RIFF", 4); memcpy(h + 8, "WAVEfmt ", 8);
+              h[16] = 16; h[20] = 1; h[22] = MIXER_CHANNELS;
+              h[24] = (unsigned char)(MIXER_RATE & 0xFF);
+              h[25] = (unsigned char)((MIXER_RATE >> 8) & 0xFF);
+              h[32] = MIXER_CHANNELS * 2; h[34] = 16;
+              memcpy(h + 36, "data", 4);
+              fwrite(h, 1, sizeof(h), g_dump);
+              fprintf(stderr, "  MIXER: writing mix to %s\n", path);
+          }
+      } }
     g_running = 1;
     g_thread = CreateThread(NULL, 0, mixer_thread, NULL, 0, NULL);
     fprintf(stderr, "  MIXER: waveOut %d Hz %d-bit stereo, %d buffers of %d frames\n",
@@ -205,6 +245,14 @@ void mixer_shutdown(void) {
         waveOutUnprepareHeader(g_dev, &g_hdr[i], sizeof(WAVEHDR));
         free(g_buf[i]);
         g_buf[i] = NULL;
+    }
+    if (g_dump && g_final_shutdown) {
+        u32 riff = g_dump_bytes + 36;
+        fseek(g_dump, 4, SEEK_SET);  fwrite(&riff, 4, 1, g_dump);
+        fseek(g_dump, 40, SEEK_SET); fwrite(&g_dump_bytes, 4, 1, g_dump);
+        fclose(g_dump);
+        g_dump = NULL;
+        fprintf(stderr, "  MIXER: mix dump closed (%u bytes)\n", g_dump_bytes);
     }
     waveOutClose(g_dev);
     CloseHandle(g_event);
@@ -252,7 +300,8 @@ void mixer_voice_free(int v) {
     UNLOCK();
 }
 
-void mixer_voice_set_pcm(int v, const void *pcm, u32 bytes, int rate, int bits, int channels) {
+void mixer_voice_set_pcm(int v, const void *pcm, u32 bytes, int rate, int bits,
+                         int channels, int is_signed) {
     Voice *x;
     LOCK();
     if ((x = get(v))) {
@@ -261,6 +310,7 @@ void mixer_voice_set_pcm(int v, const void *pcm, u32 bytes, int rate, int bits, 
         if (rate > 0)     x->rate = rate;
         if (bits == 8 || bits == 16) x->bits = bits;
         if (channels == 1 || channels == 2) x->channels = channels;
+        x->is_signed = is_signed;
         x->pos = 0;
     }
     UNLOCK();

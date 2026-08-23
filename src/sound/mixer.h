@@ -32,7 +32,11 @@ void mixer_voice_free(int v);
 /* pcm is borrowed, not copied -- for samples it points into game memory, which
  * outlives the voice. bits is 8 (unsigned, offset binary, as Miles uses) or 16
  * (signed). */
-void mixer_voice_set_pcm(int v, const void *pcm, u32 bytes, int rate, int bits, int channels);
+/* is_signed applies to 8-bit data: Miles can carry either, and says which
+ * in the flags of AIL_set_sample_type. Getting it wrong turns digital
+ * silence (0x00) into full-scale output. */
+void mixer_voice_set_pcm(int v, const void *pcm, u32 bytes, int rate, int bits,
+                         int channels, int is_signed);
 void mixer_voice_set_volume(int v, int vol);     /* 0..127 */
 void mixer_voice_set_pan(int v, int pan);        /* 0 left, 64 centre, 127 right */
 void mixer_voice_set_rate(int v, int rate);

@@ -53,6 +53,7 @@ typedef struct {
     SDL_AudioDeviceID device;
     int voice;          /* mixer voice, or -1 */
     int bits, channels; /* from AIL_set_sample_type */
+    int is_signed;      /* from its flags: DIG_PCM_SIGN */
     int was_playing;
 } MSS_Sample;
 
@@ -201,7 +202,7 @@ void AIL_set_sample_file(HSAMPLE s, void *file_image, s32 block) {
 static void sample_push(MSS_Sample *smp) {
     if (!smp || smp->voice < 0) return;
     mixer_voice_set_pcm(smp->voice, smp->data, smp->data_len,
-                        smp->rate, smp->bits, smp->channels);
+                        smp->rate, smp->bits, smp->channels, smp->is_signed);
     mixer_voice_set_volume(smp->voice, smp->volume);
     mixer_voice_set_pan(smp->voice, smp->pan);
     mixer_voice_set_loop(smp->voice, smp->loop_count);
@@ -216,13 +217,21 @@ void AIL_set_sample_address(HSAMPLE s, void *start, u32 len) {
     }
 }
 
+#define DIG_PCM_SIGN 0x0001u
+
 void AIL_set_sample_type(HSAMPLE s, s32 format, u32 flags) {
     /* Miles DIG_F_: 0 mono 8, 1 mono 16, 2 stereo 8, 3 stereo 16. */
     MSS_Sample *smp = get_sample(s);
-    (void)flags;
     if (!smp) return;
     smp->bits     = (format & 1) ? 16 : 8;
     smp->channels = (format & 2) ? 2 : 1;
+    /* DIG_PCM_SIGN. GTA1's banks are signed 8-bit; taking them as offset
+     * binary turns 0x00 -- digital silence -- into full-scale output. */
+    smp->is_signed = (flags & DIG_PCM_SIGN) != 0;
+    if (mixer_trace_enabled())
+        fprintf(stderr, "MSS shim: sample_type format=%d flags=0x%X -> %dbit %dch %s\n",
+                (int)format, (unsigned)flags, smp->bits, smp->channels,
+                smp->is_signed ? "signed" : "unsigned");
     sample_push(smp);
 }
 
@@ -335,7 +344,7 @@ HSTREAM AIL_open_stream(HDIGDRIVER dig, const char *filename, s32 stream_mem) {
                     g_streams[i].voice = mixer_voice_alloc();
                     if (g_streams[i].voice >= 0)
                         mixer_voice_set_pcm(g_streams[i].voice, g_streams[i].pcm,
-                                            nbytes, rate, bits, chans);
+                                            nbytes, rate, bits, chans, 0);
                 }
                 fprintf(stderr, "MSS shim: stream %s (%u bytes, %d Hz %d-bit %dch)\n",
                         g_streams[i].pcm ? "loaded" : "FAILED", nbytes, rate, bits, chans);

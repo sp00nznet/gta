@@ -835,7 +835,7 @@ static void bridge_AIL_set_sample_pan(void) { AIL_set_sample_pan((HSAMPLE)(uintp
 static void bridge_AIL_set_sample_playback_rate(void) { AIL_set_sample_playback_rate((HSAMPLE)(uintptr_t)ARG(1),(s32)ARG(2)); esp += 4+8; }
 static void bridge_AIL_set_sample_loop_count(void) { AIL_set_sample_loop_count((HSAMPLE)(uintptr_t)ARG(1),(s32)ARG(2)); esp += 4+8; }
 static void bridge_AIL_set_sample_address(void) { AIL_set_sample_address((HSAMPLE)(uintptr_t)ARG(1),VA2PTR(ARG(2)),ARG(3)); esp += 4+12; }
-static void bridge_AIL_set_sample_type(void) { esp += 4+12; }
+static void bridge_AIL_set_sample_type(void) { AIL_set_sample_type((HSAMPLE)(uintptr_t)ARG(1),(s32)ARG(2),ARG(3)); esp += 4+12; }
 static void bridge_AIL_open_stream(void) { eax=(u32)(uintptr_t)AIL_open_stream((HDIGDRIVER)(uintptr_t)ARG(1),VA2STR(ARG(2)),(s32)ARG(3)); esp += 4+12; }
 static void bridge_AIL_close_stream(void) { AIL_close_stream((HSTREAM)(uintptr_t)ARG(1)); esp += 4+4; }
 static void bridge_AIL_start_stream(void) { AIL_start_stream((HSTREAM)(uintptr_t)ARG(1)); esp += 4+4; }
