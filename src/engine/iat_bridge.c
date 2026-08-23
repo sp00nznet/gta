@@ -22,6 +22,7 @@
 #include "recomp_runtime.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -417,8 +418,64 @@ static void bridge_MessageBoxA(void) {
     eax = 1;  /* IDOK */
     esp += 4+16;
 }
+/*
+ * Scripted key input.
+ *
+ * The game takes input as window messages -- PeekMessageA, TranslateMessage,
+ * DispatchMessageA into its own WndProc -- so a real keypress on a focused
+ * window already works. What does not work is an unattended run: the front end
+ * waits for a key that nobody is there to press, which is indistinguishable
+ * from being stuck.
+ *
+ *   GTA_KEYS=0x0D,0x28,0x0D   virtual-key codes, sent in order
+ *   GTA_KEY_MS=2000           milliseconds between them (default 2000)
+ *   GTA_KEY_DELAY_MS=3000     wait before the first one (default 3000)
+ *
+ * Posted rather than synthesised with SendInput so it lands in the game's own
+ * queue whether or not the window has focus.
+ */
+static HWND g_game_hwnd;
+
+static DWORD WINAPI key_thread(LPVOID arg) {
+    char spec[256], buf[32];
+    DWORD gap = 2000, delay = 3000;
+    char *p;
+    (void)arg;
+
+    if (!GetEnvironmentVariableA("GTA_KEYS", spec, sizeof(spec))) return 0;
+    if (GetEnvironmentVariableA("GTA_KEY_MS", buf, sizeof(buf)))
+        gap = (DWORD)strtoul(buf, NULL, 0);
+    if (GetEnvironmentVariableA("GTA_KEY_DELAY_MS", buf, sizeof(buf)))
+        delay = (DWORD)strtoul(buf, NULL, 0);
+
+    Sleep(delay);
+    for (p = strtok(spec, ","); p; p = strtok(NULL, ",")) {
+        UINT vk = (UINT)strtoul(p, NULL, 0);
+        UINT sc = MapVirtualKeyA(vk, 0 /* MAPVK_VK_TO_VSC */);
+        LPARAM down = (LPARAM)(1 | (sc << 16));
+        LPARAM up   = down | 0xC0000000;
+        if (!vk || !g_game_hwnd) continue;
+        fprintf(stderr, "  KEYS: vk=0x%02X\n", vk);
+        PostMessageA(g_game_hwnd, WM_KEYDOWN, vk, down);
+        Sleep(40);
+        PostMessageA(g_game_hwnd, WM_KEYUP, vk, up);
+        Sleep(gap);
+    }
+    return 0;
+}
+
+static void start_key_thread(void) {
+    char buf[8];
+    static int started = 0;
+    if (started || !GetEnvironmentVariableA("GTA_KEYS", buf, sizeof(buf))) return;
+    started = 1;
+    CreateThread(NULL, 0, key_thread, NULL, 0, NULL);
+}
+
 static void bridge_CreateWindowExA(void) {
     eax = (u32)(uintptr_t)CreateWindowExA(ARG(1), VA2STR(ARG(2)), VA2STR(ARG(3)), ARG(4), (int)ARG(5),(int)ARG(6),(int)ARG(7),(int)ARG(8), (HWND)(uintptr_t)ARG(9), (HMENU)(uintptr_t)MEM32(esp+40), (HINSTANCE)(uintptr_t)MEM32(esp+44), MEM32(esp+48)?VA2PTR(MEM32(esp+48)):NULL);
+    g_game_hwnd = (HWND)(uintptr_t)eax;
+    start_key_thread();
     esp += 4+48;
 }
 /* Imported by this build but previously unbridged -- the old hand-written VA

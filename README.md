@@ -26,7 +26,7 @@ own COM vtables.*
 | **Phase 4** | **Complete** | Compilation and linking |
 | **Phase 5** | **Complete** | Runtime bringup -- CRT init, import bridging, WinMain |
 | **Phase 6** | **Complete** | Win32/DirectDraw HAL -- COM shim, 75 vtable slots, window and surfaces |
-| **Phase 7** | **In Progress** | **Visible frames** -- the title screen renders and holds. Remaining: input to the front end, mission selection, in-game rendering |
+| **Phase 7** | **In Progress** | **Visible frames and input** -- the title screen renders and the front end responds to keys. Remaining: menu navigation through to a city, mission selection, in-game rendering |
 
 ## What Works Today
 
@@ -46,10 +46,15 @@ rendered title screen:
   `CreatePalette`/`SetEntries`, `Blt`/`BltFast`, `Flip` -- 75 slots across four
   interfaces, each a bridge cookie in a vtable built in game memory
 - **Plays its intro path** through the Smacker and Miles shims
-- **Renders**: 200 frames captured, no crash, running until the watchdog stops it
+- **Renders**: hundreds of frames captured per run, no crash, running until the
+  watchdog stops it
+- **Takes input**: keys arrive as window messages, through `PeekMessageA` and
+  `DispatchMessageA` into the game's own WndProc, and drive the front end
 
-It holds on the title screen. The front end waits on input the port does not
-deliver yet.
+Left alone the game loops its title animation -- nine distinct frames, and
+`GetKeyState` is never called. Send it keys and it reads them and moves on to
+the city-select map: twenty-six distinct frames over the same interval. What it
+does not do yet is navigate a menu through to actually starting a city.
 
 ## The Interesting Bugs
 

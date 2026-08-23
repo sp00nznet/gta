@@ -38,6 +38,9 @@ carries its own instruments.
 | `GTA_DDRAW_TRACE=1` | names every DirectDraw method the game calls, not just the interface |
 | `GTA_DUMP_FRAMES=n` | writes the first n presented frames to `frameNNN.bmp`, with a count of non-zero bytes |
 | `GTA_FORCE_MODE=0x13` | forces an MGL mode index instead of letting the game pick |
+| `GTA_KEYS=0x0D,0x28` | posts these virtual-key codes to the game window in order, so an unattended run can drive the front end |
+| `GTA_KEY_MS=n` | milliseconds between scripted keys (default 2000) |
+| `GTA_KEY_DELAY_MS=n` | wait before the first scripted key (default 3000) |
 
 The runtime also prints the game's own error buffer and decodes its
 `FatalError(msgId, line, ...)` calls, whose line number names the failing check.
@@ -85,3 +88,39 @@ the second volume.
 entered. `g_cur_func` was reporting the last function entered rather than the
 caller, which sent a whole session chasing a path-string helper. It now saves and
 restores around `RECOMP_CALL`, and unresolved indirect calls name their caller.
+
+## Input
+
+The game takes input as window messages, not as polled key state: it imports
+`GetKeyState` but never `GetAsyncKeyState`, and reads the keyboard only from
+inside its own WndProc, reached through `PeekMessageA` / `TranslateMessage` /
+`DispatchMessageA`. `RegisterClassA` swaps the game's `lpfnWndProc` -- an address
+in the original image -- for a host thunk that calls the lifted function, so the
+whole path is real Win32 with the game's own handler at the end of it.
+
+That means a real keypress on the focused window already works, and always did.
+What did not work was telling the difference between "waiting for input" and
+"stuck", because an unattended run never presses anything. `GTA_KEYS` closes
+that gap, and the control run is the proof:
+
+| | With keys | No keys |
+|---|---|---|
+| distinct frames in 55s | 26 | 9 |
+| `GetKeyState` calls | 2 per keypress | 0 |
+| `DispatchMessageA` calls | 31 | 31 |
+
+The dispatch count is identical because those are the window's own paint and
+timer messages; only the key messages make the game read the keyboard.
+
+### Known: the quit path faults
+
+Sending `VK_ESCAPE` makes the game call `ExitProcess`, which is correct. The
+process then faults at `0xB0000053` -- a bridge cookie being *executed* rather
+than dispatched. Both `ExitProcess` and `CompareStringW` (cookie 0x53) are
+registered bridges, so this is not a missing import.
+
+Unconfirmed reading: the fault is one slot below the `ExitProcess` cookie sitting
+in `esi`, and it happens with the WndProc thunk still on the host stack, having
+switched to the simulated stack. `bridge_ExitProcess` calls the host CRT's
+`exit()` and never returns, so that thunk never unwinds. Something in the
+teardown then runs against a half-torn-down stack. Not yet diagnosed.

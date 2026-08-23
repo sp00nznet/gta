@@ -74,7 +74,8 @@ only through pointers in `.data`.
 - [x] Palette creation and entries
 - [x] Intro movie path
 - [x] **First frames rendered -- the title screen**
-- [ ] Input delivered to the front end
+- [x] Input delivered to the front end -- keys reach the game's WndProc and
+      advance it from the title screen to the city-select map
 - [ ] Mission selection parses `mission.ini`
 - [ ] In-game rendering
 
@@ -88,8 +89,13 @@ only through pointers in `.data`.
 
 ## Known gaps
 
-**Input.** The game holds on the title screen. The front end waits on input the
-port does not deliver yet, so nothing advances.
+**Menu navigation.** Input works -- keys reach the game's WndProc and take it
+from the title screen to the city-select map. What has not been worked out is the
+key sequence that navigates a city selection through to starting a game; Enter
+alone cycles the attract loop.
+
+**The quit path faults.** `VK_ESCAPE` makes the game call `ExitProcess`, and the
+process then faults executing a bridge cookie. See docs/BRINGUP.md.
 
 **Mission selection.** `MEM32(0x6B3E28)` -- the mission number -- stays zero, so
 `sub_0044AB90` takes its default branch and copies the hardcoded `level001.cmp`
