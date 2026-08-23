@@ -104,6 +104,30 @@ void recomp_trace_enter(uint32_t va) {
                 MEM32(g_esp + 4), MEM32(g_esp + 8), MEM32(g_esp + 12));
         recomp_dump_trace("FatalError");
     }
+    /*
+     * MGL asks sub_0048DCC0 whether a mode is available. When the caller has no
+     * preference it passes -1, expecting the driver scan to have written a
+     * default -- ours leaves it at -1, so the check indexes two bytes before the
+     * mode table and MGL_init fails. GTA_FORCE_MODE substitutes a mode number we
+     * know registered (0x13 is 640x480x8), which says whether everything past
+     * that point works while the selection itself is still being chased.
+     */
+    if (va == 0x0048DCC0u && MEM32(g_esp + 4) == 0xFFFFFFFFu) {
+        static uint32_t forced = 0xFFFFFFFFu;
+        if (forced == 0xFFFFFFFFu) {
+            char buf[16];
+            forced = GetEnvironmentVariableA("GTA_FORCE_MODE", buf, sizeof(buf))
+                   ? (uint32_t)strtoul(buf, NULL, 0) : 0;
+        }
+        if (forced) {
+            int i, avail = 0;
+            for (i = 0; i < 87; i++)
+                if (MEM8(0x7878C0u + (uint32_t)i * 2) != 0xFF) avail++;
+            fprintf(stderr, "  MGL: mode -1 -> 0x%02X (its table byte 0x%02X, %d modes registered)\n",
+                    forced, MEM8(0x7878C0u + forced * 2), avail);
+            MEM32(g_esp + 4) = forced;
+        }
+    }
     if (is_watched(va)) {
         fprintf(stderr, "  WATCH 0x%08X esp=0x%08X ecx=0x%08X args=[0x%08X 0x%08X 0x%08X 0x%08X]\n",
                 va, g_esp, g_ecx, MEM32(g_esp + 4), MEM32(g_esp + 8),
@@ -142,6 +166,22 @@ uint32_t recomp_scratch_str(const char *s) {
     uint32_t va = recomp_scratch_alloc(n);
     if (va) memcpy((void *)(uintptr_t)ADDR(va), s, n);
     return va;
+}
+
+/*
+ * GTA_SOFT_FATAL makes the game's FatalError return instead of shutting down.
+ * It reports real problems, so this is a diagnostic lever, not a fix -- but a
+ * single failed check early in init otherwise hides everything that would have
+ * happened afterwards, including whether the renderer produces frames.
+ */
+int recomp_fatal_soft(void) {
+    static int soft = -1;
+    if (soft < 0) {
+        char buf[8];
+        soft = GetEnvironmentVariableA("GTA_SOFT_FATAL", buf, sizeof(buf)) ? 1 : 0;
+        if (soft) fprintf(stderr, "  FatalError is non-fatal (GTA_SOFT_FATAL)\n");
+    }
+    return soft;
 }
 
 /* ===== dispatch ===== */

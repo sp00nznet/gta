@@ -30,6 +30,7 @@
 #define RECOMP_GENERATED_CODE
 #include "../engine/recomp_runtime.h"
 #include <string.h>
+#include <stdlib.h>
 
 #define DD_OK              0x00000000u
 #define DDERR_UNSUPPORTED  0x80004001u
@@ -180,6 +181,8 @@ static void write_surface_desc(u32 p, u32 w, u32 h, u32 bits, u32 caps, u32 bpp)
     }
 }
 
+static void dump_frame(int idx);   /* defined below; see GTA_DUMP_FRAMES */
+
 /*
  * Put the surface on screen. GDI understands both formats directly: a 256-entry
  * colour table for 8bpp, or BI_BITFIELDS with 5-6-5 masks for 16bpp. Either way
@@ -229,6 +232,85 @@ static void present(int idx) {
                   (void *)(uintptr_t)ADDR(g_surf[idx].bits),
                   (BITMAPINFO *)&bmi, DIB_RGB_COLORS, SRCCOPY);
     ReleaseDC(g_hwnd, dc);
+    dump_frame(idx);
+}
+
+/*
+ * Write what we just presented to a .bmp. A window that appears and vanishes
+ * proves nothing; a file on disk is evidence that real pixels came out of the
+ * lifted renderer. Enabled with GTA_DUMP_FRAMES=n (first n frames).
+ */
+static int g_dump_left = -1;
+static int g_frame_no;
+
+static void dump_frame(int idx) {
+    char path[64];
+    FILE *f;
+    u32 w = g_surf[idx].w, h = g_surf[idx].h, bpp = g_surf[idx].bpp;
+    u32 row = (w * 3 + 3) & ~3u;         /* 24-bit BMP rows are 4-byte aligned */
+    u32 imgsize = row * h;
+    unsigned char hdr[54];
+    unsigned char *line;
+    const unsigned char *src = (const unsigned char *)(uintptr_t)ADDR(g_surf[idx].bits);
+    u32 x, y;
+    int nonzero = 0;
+
+    if (g_dump_left < 0) {
+        char buf[16];
+        g_dump_left = GetEnvironmentVariableA("GTA_DUMP_FRAMES", buf, sizeof(buf))
+                    ? atoi(buf) : 0;
+    }
+    if (g_dump_left <= 0) return;
+
+    sprintf(path, "frame%03d.bmp", g_frame_no++);
+    f = fopen(path, "wb");
+    if (!f) return;
+    line = (unsigned char *)malloc(row);
+    if (!line) { fclose(f); return; }
+
+    memset(hdr, 0, sizeof(hdr));
+    hdr[0] = 'B'; hdr[1] = 'M';
+    *(u32 *)(hdr + 2)  = 54 + imgsize;
+    *(u32 *)(hdr + 10) = 54;
+    *(u32 *)(hdr + 14) = 40;
+    *(int *)(hdr + 18) = (int)w;
+    *(int *)(hdr + 22) = (int)h;        /* positive: bottom-up, as BMP wants */
+    *(unsigned short *)(hdr + 26) = 1;
+    *(unsigned short *)(hdr + 28) = 24;
+    *(u32 *)(hdr + 34) = imgsize;
+    fwrite(hdr, 1, sizeof(hdr), f);
+
+    for (y = 0; y < h; y++) {
+        const unsigned char *s = src + (size_t)(h - 1 - y) * w * (bpp / 8);
+        memset(line, 0, row);
+        for (x = 0; x < w; x++) {
+            unsigned char r, g, b;
+            if (bpp == 8) {
+                unsigned char v = s[x];
+                r = g_pal[v].peRed; g = g_pal[v].peGreen; b = g_pal[v].peBlue;
+            } else {
+                unsigned short v = ((const unsigned short *)s)[x];
+                r = (unsigned char)((v >> 11) << 3);
+                g = (unsigned char)(((v >> 5) & 0x3F) << 2);
+                b = (unsigned char)((v & 0x1F) << 3);
+            }
+            if (r | g | b) nonzero++;
+            line[x * 3 + 0] = b; line[x * 3 + 1] = g; line[x * 3 + 2] = r;
+        }
+        fwrite(line, 1, row, f);
+    }
+    free(line);
+    fclose(f);
+    g_dump_left--;
+    {   /* Distinguish "nothing drawn" from "drawn but the palette is black":
+         * the game clears to index 0 and sets its palette later. */
+        u32 n = w * h * (bpp / 8), k, nz = 0;
+        for (k = 0; k < n; k++) if (src[k]) nz++;
+        fprintf(stderr, "  DDRAW: %s raw non-zero bytes: %u of %u", path, nz, n);
+        fputc(10, stderr);
+    }
+    fprintf(stderr, "  DDRAW: wrote %s (%ux%u %u-bit, %d non-black pixels)\n",
+            path, w, h, bpp, nonzero);
 }
 
 static u32 make_object(int iface) {
