@@ -181,6 +181,69 @@ static void write_surface_desc(u32 p, u32 w, u32 h, u32 bits, u32 caps, u32 bpp)
     }
 }
 
+/*
+ * Blt / BltFast. MGL renders into an offscreen surface and blits it to the
+ * primary; with these returning DD_OK and doing nothing, the pixels are drawn
+ * and then thrown away, so the screen can never show anything.
+ *
+ * Rectangles are optional (NULL means the whole surface) and a colour fill
+ * carries no source surface at all, so both cases are handled explicitly.
+ */
+#define DDBLT_COLORFILL 0x00000400u
+#define BLTFX_FILLCOLOR 0x50            /* DDBLTFX.dwFillColor */
+
+static void read_rect(u32 p, int *l, int *t, int *r, int *b, int dw, int dh) {
+    if (p) {
+        *l = (int)MEM32(p + 0); *t = (int)MEM32(p + 4);
+        *r = (int)MEM32(p + 8); *b = (int)MEM32(p + 12);
+    } else {
+        *l = 0; *t = 0; *r = dw; *b = dh;
+    }
+    if (*l < 0) *l = 0;
+    if (*t < 0) *t = 0;
+    if (*r > dw) *r = dw;
+    if (*b > dh) *b = dh;
+}
+
+/* Copy src rect to dst rect, sampling nearest when the sizes differ. */
+static void blit_rect(int di, int si, int dl, int dt, int dr, int db,
+                      int sl, int st, int sr, int sb) {
+    u32 bpp = g_surf[di].bpp / 8;
+    u32 dpitch = g_surf[di].w * bpp, spitch = g_surf[si].w * bpp;
+    unsigned char *d = (unsigned char *)(uintptr_t)ADDR(g_surf[di].bits);
+    const unsigned char *s = (const unsigned char *)(uintptr_t)ADDR(g_surf[si].bits);
+    int dw = dr - dl, dh = db - dt, sw = sr - sl, sh = sb - st, x, y;
+
+    if (dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0) return;
+    if (g_surf[si].bpp != g_surf[di].bpp) return;   /* no format conversion */
+
+    for (y = 0; y < dh; y++) {
+        int sy = st + (sh == dh ? y : y * sh / dh);
+        unsigned char *drow = d + (size_t)(dt + y) * dpitch + (size_t)dl * bpp;
+        const unsigned char *srow = s + (size_t)sy * spitch;
+        if (sw == dw) {
+            memcpy(drow, srow + (size_t)sl * bpp, (size_t)dw * bpp);
+        } else {
+            for (x = 0; x < dw; x++)
+                memcpy(drow + (size_t)x * bpp,
+                       srow + (size_t)(sl + x * sw / dw) * bpp, bpp);
+        }
+    }
+}
+
+static void fill_rect(int di, int l, int t, int r, int b, u32 colour) {
+    u32 bpp = g_surf[di].bpp / 8, pitch = g_surf[di].w * bpp;
+    unsigned char *d = (unsigned char *)(uintptr_t)ADDR(g_surf[di].bits);
+    int x, y;
+    for (y = t; y < b; y++) {
+        unsigned char *row = d + (size_t)y * pitch;
+        for (x = l; x < r; x++) {
+            if (bpp == 1) row[x] = (unsigned char)colour;
+            else ((unsigned short *)row)[x] = (unsigned short)colour;
+        }
+    }
+}
+
 static void dump_frame(int idx);   /* defined below; see GTA_DUMP_FRAMES */
 
 /*
@@ -508,6 +571,32 @@ static void shim_dispatch(void) {
     case IF_SURFACE:
         si = surf_index(self);
         switch (slot) {
+        case 5: {  /* Blt(lpDestRect, lpDDSrcSurface, lpSrcRect, dwFlags, lpDDBltFx) */
+            int ss = surf_index(ARG(3));
+            int dl, dt, dr, db, sl, st, sr, sb;
+            if (si < 0) { ret = DDERR_UNSUPPORTED; break; }
+            read_rect(ARG(2), &dl, &dt, &dr, &db, (int)g_surf[si].w, (int)g_surf[si].h);
+            if (ARG(5) & DDBLT_COLORFILL) {
+                fill_rect(si, dl, dt, dr, db, ARG(6) ? MEM32(ARG(6) + BLTFX_FILLCOLOR) : 0);
+            } else if (ss >= 0) {
+                read_rect(ARG(4), &sl, &st, &sr, &sb, (int)g_surf[ss].w, (int)g_surf[ss].h);
+                blit_rect(si, ss, dl, dt, dr, db, sl, st, sr, sb);
+            } else {
+                ret = DDERR_UNSUPPORTED;
+                break;
+            }
+            if (g_surf[si].is_primary) present(si);
+            break;
+        }
+        case 7: {  /* BltFast(dwX, dwY, lpDDSrcSurface, lpSrcRect, dwTrans) */
+            int ss = surf_index(ARG(4));
+            int x = (int)ARG(2), y = (int)ARG(3), sl, st, sr, sb;
+            if (si < 0 || ss < 0) { ret = DDERR_UNSUPPORTED; break; }
+            read_rect(ARG(5), &sl, &st, &sr, &sb, (int)g_surf[ss].w, (int)g_surf[ss].h);
+            blit_rect(si, ss, x, y, x + (sr - sl), y + (sb - st), sl, st, sr, sb);
+            if (g_surf[si].is_primary) present(si);
+            break;
+        }
         case 11: /* Flip(lpDDSurfaceTargetOverride, dwFlags) */
             if (si >= 0) {
                 int b = g_surf[si].paired;
