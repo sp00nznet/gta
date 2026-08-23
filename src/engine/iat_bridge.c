@@ -343,7 +343,22 @@ static void bridge_HeapAlloc(void) {
 }
 static void bridge_HeapFree(void) { eax = HeapFree(heap_of(ARG(1)), ARG(2), (void*)(uintptr_t)ARG(3)); esp += 4+12; }
 static void bridge_HeapReAlloc(void) { eax = (u32)(uintptr_t)HeapReAlloc(heap_of(ARG(1)), ARG(2), (void*)(uintptr_t)ARG(3), ARG(4)); esp += 4+16; }
-static void bridge_CreateFileA(void) { eax = (u32)(uintptr_t)CreateFileA(VA2STR(ARG(1)), ARG(2), ARG(3), ARG(4)?VA2PTR(ARG(4)):NULL, ARG(5), ARG(6), (HANDLE)(uintptr_t)ARG(7)); esp += 4+28; }
+/* GTA_FILE_TRACE names every file the game opens, and whether it got it.
+ * Which data files a screen does and does not reach for says more about where
+ * it stopped than any function trace. */
+static int g_file_trace = -1;
+static void bridge_CreateFileA(void) {
+    const char *path = VA2STR(ARG(1));
+    HANDLE h = CreateFileA(path, ARG(2), ARG(3), ARG(4)?VA2PTR(ARG(4)):NULL, ARG(5), ARG(6), (HANDLE)(uintptr_t)ARG(7));
+    if (g_file_trace < 0) {
+        char b[8];
+        g_file_trace = GetEnvironmentVariableA("GTA_FILE_TRACE", b, sizeof(b)) ? 1 : 0;
+    }
+    if (g_file_trace)
+        fprintf(stderr, "  FILE: %s%s\n", path, h == INVALID_HANDLE_VALUE ? "   <-- FAILED" : "");
+    eax = (u32)(uintptr_t)h;
+    esp += 4+28;
+}
 static void bridge_ReadFile(void) { eax = ReadFile((HANDLE)(uintptr_t)ARG(1), VA2PTR(ARG(2)), ARG(3), (LPDWORD)VA2PTR(ARG(4)), ARG(5)?VA2PTR(ARG(5)):NULL); esp += 4+20; }
 static void bridge_WriteFile(void) { eax = WriteFile((HANDLE)(uintptr_t)ARG(1), VA2PTR(ARG(2)), ARG(3), (LPDWORD)VA2PTR(ARG(4)), ARG(5)?VA2PTR(ARG(5)):NULL); esp += 4+20; }
 static void bridge_CloseHandle(void) { eax = CloseHandle((HANDLE)(uintptr_t)ARG(1)); esp += 4+4; }
@@ -434,6 +449,48 @@ static void bridge_MessageBoxA(void) {
  * Posted rather than synthesised with SendInput so it lands in the game's own
  * queue whether or not the window has focus.
  */
+/*
+ * GTA_MISSION=N -- force the mission number the front end would have picked.
+ *
+ * sub_0044AB90 reads the mission number from 0x6B3E28. Zero means "none", and
+ * it then copies a hardcoded "level001.cmp" into the level-name global instead
+ * of parsing ..\gtadata\mission.ini, whose first record names nyc.cmp. The
+ * front end is what sets that number, so until menu navigation is worked out
+ * the number stays zero and the game asks for a file retail does not ship.
+ *
+ * This holds the global at N so whenever the game applies it, it applies a real
+ * mission. It is a shortcut around the front end, not a fix for it: it says
+ * nothing about whether the menu works, only whether everything downstream of
+ * it does.
+ */
+#define MISSION_NUMBER_VA 0x6B3E28u
+
+static DWORD WINAPI mission_thread(LPVOID arg) {
+    u32 want = (u32)(uintptr_t)arg;
+    int announced = 0;
+    for (;;) {
+        if (MEM32(MISSION_NUMBER_VA) != want) {
+            MEM32(MISSION_NUMBER_VA) = want;
+            if (!announced) {
+                fprintf(stderr, "  MISSION: forcing mission %u\n", want);
+                announced = 1;
+            }
+        }
+        Sleep(20);
+    }
+}
+
+static void start_mission_thread(void) {
+    char buf[16];
+    static int started = 0;
+    u32 want;
+    if (started || !GetEnvironmentVariableA("GTA_MISSION", buf, sizeof(buf))) return;
+    want = (u32)strtoul(buf, NULL, 0);
+    if (!want) return;
+    started = 1;
+    CreateThread(NULL, 0, mission_thread, (LPVOID)(uintptr_t)want, 0, NULL);
+}
+
 static HWND g_game_hwnd;
 
 static DWORD WINAPI key_thread(LPVOID arg) {
@@ -476,6 +533,7 @@ static void bridge_CreateWindowExA(void) {
     eax = (u32)(uintptr_t)CreateWindowExA(ARG(1), VA2STR(ARG(2)), VA2STR(ARG(3)), ARG(4), (int)ARG(5),(int)ARG(6),(int)ARG(7),(int)ARG(8), (HWND)(uintptr_t)ARG(9), (HMENU)(uintptr_t)MEM32(esp+40), (HINSTANCE)(uintptr_t)MEM32(esp+44), MEM32(esp+48)?VA2PTR(MEM32(esp+48)):NULL);
     g_game_hwnd = (HWND)(uintptr_t)eax;
     start_key_thread();
+    start_mission_thread();
     esp += 4+48;
 }
 /* Imported by this build but previously unbridged -- the old hand-written VA
@@ -550,6 +608,7 @@ static const WNDPROC g_wndproc_thunks[MAX_WNDPROCS] = {
 static WNDPROC route_wndproc(u32 va) {
     for (int i = 0; i < g_wndproc_count; i++)
         if (g_wndproc_va[i] == va) return g_wndproc_thunks[i];
+    fprintf(stderr, "  WNDPROC: routing 0x%08X through thunk %d\n", va, g_wndproc_count);
     if (g_wndproc_count >= MAX_WNDPROCS) {
         fprintf(stderr, "  WNDPROC: out of thunks, 0x%08X unrouted\n", va);
         return NULL;
