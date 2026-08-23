@@ -41,6 +41,8 @@ carries its own instruments.
 | `GTA_KEYS=0x0D,0x28` | posts these virtual-key codes to the game window in order, so an unattended run can drive the front end |
 | `GTA_KEY_MS=n` | milliseconds between scripted keys (default 2000) |
 | `GTA_KEY_DELAY_MS=n` | wait before the first scripted key (default 3000) |
+| `GTA_FILE_TRACE=1` | names every file the game opens, and flags the ones it fails to get |
+| `GTA_MISSION=n` | holds the mission-number global at n, bypassing the front end's choice |
 
 The runtime also prints the game's own error buffer and decodes its
 `FatalError(msgId, line, ...)` calls, whose line number names the failing check.
@@ -124,3 +126,29 @@ in `esi`, and it happens with the WndProc thunk still on the host stack, having
 switched to the simulated stack. `bridge_ExitProcess` calls the host CRT's
 `exit()` and never returns, so that thunk never unwinds. Something in the
 teardown then runs against a half-torn-down stack. Not yet diagnosed.
+
+## Where the front end stops
+
+Input reaches the game and the menu responds to it: watching `sub_0044AB50`,
+the mission-number setter, shows it called with `0` at startup and then with
+**`1`** after a navigation sequence. So the front end is running, reading keys,
+and making a selection. It just never leaves the menu to start the game.
+
+`GTA_FILE_TRACE` rules out missing data as the cause. The front end opens 35
+files and **every one of them succeeds** -- the logo and menu-button graphics
+(`f_logo0-7`, `f_play1-8`, `f_rstar`), all six fonts including the city-name
+fonts `f_city1-4.fon`, the text table, and `LEVEL000.RAW` (which is also the
+production confirmation that the `%03d` sign fix holds -- that file is exactly
+the one the port used to ask for as `LEVEL-00.RAW`).
+
+`GTA_MISSION` rules out the level name too. Forcing the global to 1 makes
+`sub_0044AB90` parse `mission.ini` instead of falling back to the hardcoded
+`level001.cmp`, and with that fallback file deleted the game no longer asks for
+it and raises no error -- but it still sits on the map screen. Setting what
+*would* load does not make the front end decide to load it.
+
+So the remaining gap is narrower than "input" or "data": it is the transition
+out of the front-end state machine. The map screen draws the map but no city
+labels, despite `f_city1-4.fon` being loaded, which is the most promising thread
+to pull -- either those labels are drawn somewhere the port does not present, or
+the selection state that would draw them is never entered.

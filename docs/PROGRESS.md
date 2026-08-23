@@ -89,10 +89,11 @@ only through pointers in `.data`.
 
 ## Known gaps
 
-**Menu navigation.** Input works -- keys reach the game's WndProc and take it
-from the title screen to the city-select map. What has not been worked out is the
-key sequence that navigates a city selection through to starting a game; Enter
-alone cycles the attract loop.
+**The front end never starts a game.** Input works, and the menu responds: the
+mission-number setter is called with 1 after a navigation sequence. All 35
+front-end files load with no failures. Forcing the mission number does not help
+either. The gap is the transition out of the front-end state machine, not input,
+data, or the level name. See docs/BRINGUP.md.
 
 **The quit path faults.** `VK_ESCAPE` makes the game call `ExitProcess`, and the
 process then faults executing a bridge cookie. See docs/BRINGUP.md.
