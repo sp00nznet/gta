@@ -99,7 +99,10 @@ def generate_recomp_files(functions, iat_map, output_dir, split_size=1000, func_
         os.remove(stale)
 
     lifter = Lifter(iat_map=iat_map, func_names=func_names or {},
-                    lifted=set(functions.keys()))
+                    lifted=set(functions.keys()),
+                    # cmp/sbb/neg is how MGL returns success; the stale-_cf
+                    # reading makes those returns arbitrary.
+                    precise_sbb=True)
 
     sorted_funcs = sorted(functions.values(), key=lambda f: f.address)
     total = len(sorted_funcs)

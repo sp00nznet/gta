@@ -404,7 +404,19 @@ static void bridge_GetSystemTimeAsFileTime(void) { GetSystemTimeAsFileTime((FILE
 static void bridge_IsBadCodePtr(void) { eax = 0; esp += 4+4; } /* always valid */
 
 /* ===== USER32 bridges ===== */
-static void bridge_MessageBoxA(void) { eax = MessageBoxA((HWND)(uintptr_t)ARG(1), VA2STR(ARG(2)), VA2STR(ARG(3)), ARG(4)); esp += 4+16; }
+/*
+ * The game reports its failures through a message box. Log the text -- it says
+ * in words what a stack of addresses only implies -- and answer it ourselves
+ * rather than calling the real API, which would block on a dialog nobody is
+ * there to dismiss.
+ */
+static void bridge_MessageBoxA(void) {
+    const char *text  = ARG(2) ? VA2STR(ARG(2)) : "";
+    const char *title = ARG(3) ? VA2STR(ARG(3)) : "";
+    fprintf(stderr, "*** MessageBox [%s] %s\n", title, text);
+    eax = 1;  /* IDOK */
+    esp += 4+16;
+}
 static void bridge_CreateWindowExA(void) {
     eax = (u32)(uintptr_t)CreateWindowExA(ARG(1), VA2STR(ARG(2)), VA2STR(ARG(3)), ARG(4), (int)ARG(5),(int)ARG(6),(int)ARG(7),(int)ARG(8), (HWND)(uintptr_t)ARG(9), (HMENU)(uintptr_t)MEM32(esp+40), (HINSTANCE)(uintptr_t)MEM32(esp+44), MEM32(esp+48)?VA2PTR(MEM32(esp+48)):NULL);
     esp += 4+48;

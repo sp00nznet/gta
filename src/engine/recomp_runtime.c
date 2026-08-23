@@ -100,8 +100,22 @@ void recomp_trace_enter(uint32_t va) {
     g_enter_idx++;
 
     if (va == GTA_FATAL_ERROR_VA) {
+        int k;
         fprintf(stderr, "*** FatalError(msg=0x%08X, line=%u, arg3=0x%08X) ***\n",
                 MEM32(g_esp + 4), MEM32(g_esp + 8), MEM32(g_esp + 12));
+        /* The last few functions entered, inline. Several call sites share a
+         * line number, so the message alone does not say which one fired, and
+         * the full ring dump buries it a thousand lines down. */
+        /* Read at the moment of failure: by exit, cleanup has zeroed these. */
+        fprintf(stderr, "    MGL now: err=%d displayDC=0x%08X memDC=0x%08X driver=0x%08X mode=0x%02X\n",
+                (int)MEM32(0x7873BCu), MEM32(0x504CC8u), MEM32(0x504CCCu),
+                MEM32(0x4B4F70u), MEM32(0x787184u));
+        fprintf(stderr, "    reached from:");
+        for (k = 6; k >= 1; k--) {
+            uint32_t idx = (g_enter_idx - (uint32_t)k) & (RECOMP_ENTER_SIZE - 1);
+            if (g_enter_trace[idx]) fprintf(stderr, " 0x%08X", g_enter_trace[idx]);
+        }
+        fputc('\n', stderr);
         recomp_dump_trace("FatalError");
     }
     /*
@@ -125,13 +139,14 @@ void recomp_trace_enter(uint32_t va) {
                 if (MEM8(0x7878C0u + (uint32_t)i * 2) != 0xFF) avail++;
             fprintf(stderr, "  MGL: mode -1 -> 0x%02X (its table byte 0x%02X, %d modes registered)\n",
                     forced, MEM8(0x7878C0u + forced * 2), avail);
-            MEM32(g_esp + 4) = forced;
+            if (MEM32(g_esp + 4) != forced) MEM32(g_esp + 4) = forced;
         }
     }
     if (is_watched(va)) {
-        fprintf(stderr, "  WATCH 0x%08X esp=0x%08X ecx=0x%08X args=[0x%08X 0x%08X 0x%08X 0x%08X]\n",
+        fprintf(stderr, "  WATCH 0x%08X esp=0x%08X ecx=0x%08X args=[%08X %08X %08X %08X %08X %08X %08X]\n",
                 va, g_esp, g_ecx, MEM32(g_esp + 4), MEM32(g_esp + 8),
-                MEM32(g_esp + 12), MEM32(g_esp + 16));
+                MEM32(g_esp + 12), MEM32(g_esp + 16), MEM32(g_esp + 20),
+                MEM32(g_esp + 24), MEM32(g_esp + 28));
     }
 }
 #endif
@@ -275,6 +290,9 @@ static void dump_game_error(void) {
      */
     {
         int i, found = 0;
+        fprintf(stderr, "  MGL state: err=%d displayDC=0x%08X driver=0x%08X modeIdx=%d",
+                (int)MEM32(0x7873BCu), MEM32(0x504CC8u), MEM32(0x4B4F70u), (int)MEM32(0x504CBCu));
+        fputc(10, stderr);
         fprintf(stderr, "  MGL modes available:");
         for (i = 0; i < 87; i++) {
             if (MEM8(0x7878C0u + (uint32_t)i * 2) != 0xFF) {

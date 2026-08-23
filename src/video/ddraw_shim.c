@@ -313,6 +313,41 @@ static void dump_frame(int idx) {
             path, w, h, bpp, nonzero);
 }
 
+/* DDCAPS field offsets we care about (dwSize 0x13C). */
+#define DC_SIZE        0x00
+#define DC_CAPS        0x04
+#define DC_PALCAPS     0x18
+#define DC_VIDMEMTOTAL 0x3C
+#define DC_VIDMEMFREE  0x40
+
+#define DDCAPS_BLT           0x00000040u
+#define DDCAPS_GDI           0x00000400u
+#define DDCAPS_BLTSTRETCH    0x00000200u
+#define DDCAPS_PALETTE       0x00008000u
+#define DDCAPS_BLTCOLORFILL  0x04000000u
+#define DDCAPS_CANBLTSYSMEM  0x80000000u
+/* DDCAPS_BANKSWITCHED (0x08000000) stays CLEAR on purpose: MGL takes its
+ * banked-framebuffer path when it is set, and ours is linear. */
+
+#define DDPCAPS_8BIT           0x00000004u
+#define DDPCAPS_PRIMARYSURFACE 0x00000010u
+#define DDPCAPS_ALLOW256       0x00000040u
+
+static void fill_caps(u32 p) {
+    u32 size = MEM32(p + DC_SIZE);
+    u32 i;
+    if (size < 0x20 || size > 0x400) size = 0x13C;   /* caller sets dwSize */
+    for (i = 4; i < size; i += 4) MEM32(p + i) = 0;
+    MEM32(p + DC_SIZE)        = size;
+    MEM32(p + DC_CAPS)        = DDCAPS_BLT | DDCAPS_GDI | DDCAPS_BLTSTRETCH |
+                                DDCAPS_PALETTE | DDCAPS_BLTCOLORFILL |
+                                DDCAPS_CANBLTSYSMEM;
+    MEM32(p + DC_PALCAPS)     = DDPCAPS_8BIT | DDPCAPS_PRIMARYSURFACE |
+                                DDPCAPS_ALLOW256;
+    MEM32(p + DC_VIDMEMTOTAL) = 4u * 1024u * 1024u;
+    MEM32(p + DC_VIDMEMFREE)  = 4u * 1024u * 1024u;
+}
+
 static u32 make_object(int iface) {
     u32 obj = recomp_scratch_alloc(8);
     MEM32(obj) = g_vtable[iface];
@@ -413,7 +448,7 @@ static void shim_dispatch(void) {
         g_dd_trace = GetEnvironmentVariableA("GTA_DDRAW_TRACE", buf, sizeof(buf)) ? 1 : 0;
     }
     if (g_dd_trace)
-        fprintf(stderr, "    DD %s::slot%d (0x%02X)\n", k_iface_name[iface], slot, slot * 4);
+        fprintf(stderr, "    DD %s::slot%d (0x%02X) from 0x%08X\n", k_iface_name[iface], slot, slot * 4, g_cur_func);
 
     switch (iface) {
 
@@ -444,7 +479,15 @@ static void shim_dispatch(void) {
         case 8:  /* EnumDisplayModes(dwFlags, lpDDSurfaceDesc, ctx, callback) */
             enum_display_modes(ARG(4), ARG(5));
             break;
-        case 11: /* GetCaps -- the game only sizes the struct; zeros are fine */
+        case 11: /* GetCaps(lpDDDriverCaps, lpDDHELCaps) */
+            /*
+             * Not zeros: MGL reads these back and branches on them -- it tests
+             * DDCAPS_BANKSWITCHED to decide between a banked and a linear
+             * framebuffer, and consults the palette caps before driving an
+             * 8-bit primary. Report a plain, capable, non-banked device.
+             */
+            if (ARG(2)) fill_caps(ARG(2));
+            if (ARG(3)) fill_caps(ARG(3));
             break;
         case 20: /* SetCooperativeLevel(hWnd, dwFlags) */
             g_hwnd = (HWND)(uintptr_t)ARG(2);
