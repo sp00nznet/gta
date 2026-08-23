@@ -10,6 +10,14 @@
 #include <string.h>
 #include <stdio.h>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+static DWORD g_ms_base;   /* GetTickCount at AIL_startup */
+#endif
+
 #if HAS_SDL2
 #include <SDL2/SDL.h>
 #else
@@ -73,6 +81,10 @@ static MSS_Timer g_timers[MAX_TIMERS];
 
 u32 AIL_startup(void) {
     if (g_mss_initialized) return 1;
+
+#ifdef _WIN32
+    g_ms_base = GetTickCount();
+#endif
 
     if (SDL_InitSubSystem(SDL_INIT_AUDIO | SDL_INIT_TIMER) < 0) {
         fprintf(stderr, "MSS shim: SDL audio init failed: %s\n", SDL_GetError());
@@ -420,5 +432,18 @@ void AIL_mem_free_lock(void *ptr) {
 /* --- Utility --- */
 
 u32 AIL_ms_count(void) {
+    /*
+     * Milliseconds since AIL_startup, from the host clock.
+     *
+     * Deliberately NOT SDL_GetTicks(): when SDL2 is absent the stub above
+     * returns 0 forever, and the game busy-waits on this counter to pace
+     * itself. It would load Liberty City and then spin here for good, which
+     * looks exactly like a hang in the level loader. A millisecond counter has
+     * no business depending on whether the audio library is available.
+     */
+#ifdef _WIN32
+    return (u32)(GetTickCount() - g_ms_base);
+#else
     return SDL_GetTicks();
+#endif
 }

@@ -152,3 +152,60 @@ out of the front-end state machine. The map screen draws the map but no city
 labels, despite `f_city1-4.fon` being loaded, which is the most promising thread
 to pull -- either those labels are drawn somewhere the port does not present, or
 the selection state that would draw them is never entered.
+
+## The front-end state machine
+
+`sub_00426A50` is the main loop, and it switches on `MEM32(0x5101D0)` -- 21
+states through a jump table at `0x426F74`. `GTA_WATCH_MEM` polls that global and
+reports every change, which turns the front end from a black box into something
+you can drive and read.
+
+The observed path, with `GTA_KEYS=0x0D,0x28,0x0D,0x28,0x0D`:
+
+```
+0 -> 7 -> 11 -> 8 -> 6
+     title  menu  select  play
+```
+
+Two states matter:
+
+| State | Handler | What it does |
+|---|---|---|
+| 3 | `sub_00428680` | starts the game proper: promotes the audio mode via `sub_00412B20`, then `sub_00487000`, `sub_0042D8E0` |
+| 6 | `sub_00428BF0` | the play state -- this is what loads the city |
+
+**Reaching state 6 works.** The game opens `..\gtadata\nyc.cmp` and
+`..\gtadata\style001.g24` and reads them in full -- 1.8 MB, 1.1 MB and 1.28 MB
+of tile and sprite data -- through its own menu, with no forcing. Liberty City
+loads.
+
+**State 3 is skipped, and that is where it stops.** `sub_00428680` promotes
+`MEM32(0x501D7C)` from 1 to 2. Nothing else does. `sub_00412A90` opens with
+`cmp dword ptr [0x501D7C], 2` and returns -1 when it does not match, and its
+caller loops on that answer forever: the crash-trace ring comes back with all
+1024 entries being that one function. So the game sits in the play state having
+loaded the city, spinning on a request that can never succeed.
+
+The two states are reached from different arms of the same branch in the menu
+code, on `MEM32(0x511104)`. The arm we take pushes the literal `6` to
+`sub_00427030`; the other arm sets `0x5110EC` -- exactly the global
+`sub_00428680` reads -- and pushes a computed state. Which is to say the port is
+taking a "resume" path where it should take a "start" one.
+
+### AIL_ms_count returned zero forever
+
+Getting that far needed one real fix. `AIL_ms_count` was implemented as
+`SDL_GetTicks()`, and this build has no SDL2 -- so it used the stub at the top
+of `miles_shim.c`, which returns a constant `0`. The game paces itself on that
+counter, so it would load the city and then spin, which looks exactly like a
+hang in the level loader.
+
+It now reads the host clock (`GetTickCount()` since `AIL_startup`). A
+millisecond counter has no business depending on whether the audio library is
+available. With it, the game gets past pacing and into level audio setup:
+`AIL_allocate_sample_handle`, `AIL_init_sample` and `AIL_set_sample_type`
+seventeen times each, and `AIL_open_stream` on `..//music//track1.wav`.
+
+`SDL_AddTimer` is stubbed the same way, so Miles timers never fire -- but that
+turns out not to matter here: `AIL_register_timer` and `AIL_start_timer` are
+never called on this path.

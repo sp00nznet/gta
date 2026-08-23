@@ -76,7 +76,10 @@ only through pointers in `.data`.
 - [x] **First frames rendered -- the title screen**
 - [x] Input delivered to the front end -- keys reach the game's WndProc and
       advance it from the title screen to the city-select map
-- [ ] Mission selection parses `mission.ini`
+- [x] Mission selection -- the menu sets the mission number and
+      `sub_0044AB90` parses `mission.ini`
+- [x] The city loads: `nyc.cmp` and `style001.g24` read in full
+- [ ] Starting the game (state 3 is skipped; see Known gaps)
 - [ ] In-game rendering
 
 ## Phase 6: Playable
@@ -89,20 +92,16 @@ only through pointers in `.data`.
 
 ## Known gaps
 
-**The front end never starts a game.** Input works, and the menu responds: the
-mission-number setter is called with 1 after a navigation sequence. All 35
-front-end files load with no failures. Forcing the mission number does not help
-either. The gap is the transition out of the front-end state machine, not input,
-data, or the level name. See docs/BRINGUP.md.
+**The game loads Liberty City but cannot start it.** Driven with
+`GTA_KEYS=0x0D,0x28,0x0D,0x28,0x0D` the front end walks 0 -> 7 -> 11 -> 8 -> 6
+and opens `nyc.cmp` and `style001.g24`, reading both in full -- through its own
+menu, no forcing. It then spins: state 3, which promotes the audio mode, is
+skipped, so `sub_00412A90` returns -1 forever and the play state waits on it.
+The port takes a "resume" arm of the menu branch where it should take "start".
+See docs/BRINGUP.md.
 
 **The quit path faults.** `VK_ESCAPE` makes the game call `ExitProcess`, and the
 process then faults executing a bridge cookie. See docs/BRINGUP.md.
-
-**Mission selection.** `MEM32(0x6B3E28)` -- the mission number -- stays zero, so
-`sub_0044AB90` takes its default branch and copies the hardcoded `level001.cmp`
-into the level-name global instead of parsing `..\gtadata\mission.ini`, whose
-first record names `nyc.cmp`. The front end is what sets that number, which puts
-this behind the input gap.
 
 **Rendering path.** Frames reach the screen through `StretchDIBits`, not the
 OpenGL renderer the project is aiming at. Correct, and not fast.

@@ -463,6 +463,46 @@ static void bridge_MessageBoxA(void) {
  * nothing about whether the menu works, only whether everything downstream of
  * it does.
  */
+/*
+ * GTA_WATCH_MEM=0x5101d0,0x6b3e28 -- poll game globals and report every change.
+ *
+ * GTA_WATCH reports function entries, which is the wrong shape for a state
+ * machine: the front end is one function (sub_00426A50) switching on
+ * MEM32(0x5101D0), so what matters is the value, not the call. Polling from
+ * outside costs nothing and needs no re-lift.
+ */
+#define MAX_WATCH_MEM 8
+static u32 g_watch_va[MAX_WATCH_MEM];
+static int g_watch_va_count;
+
+static DWORD WINAPI watch_mem_thread(LPVOID arg) {
+    u32 last[MAX_WATCH_MEM];
+    int i, first = 1;
+    (void)arg;
+    for (;;) {
+        for (i = 0; i < g_watch_va_count; i++) {
+            u32 v = MEM32(g_watch_va[i]);
+            if (first || v != last[i]) {
+                fprintf(stderr, "  MEM 0x%08X = 0x%08X (%u)\n", g_watch_va[i], v, v);
+                last[i] = v;
+            }
+        }
+        first = 0;
+        Sleep(8);
+    }
+}
+
+static void start_watch_mem(void) {
+    char spec[128], *p;
+    static int started = 0;
+    if (started || !GetEnvironmentVariableA("GTA_WATCH_MEM", spec, sizeof(spec))) return;
+    for (p = strtok(spec, ","); p && g_watch_va_count < MAX_WATCH_MEM; p = strtok(NULL, ","))
+        g_watch_va[g_watch_va_count++] = (u32)strtoul(p, NULL, 16);
+    if (!g_watch_va_count) return;
+    started = 1;
+    CreateThread(NULL, 0, watch_mem_thread, NULL, 0, NULL);
+}
+
 #define MISSION_NUMBER_VA 0x6B3E28u
 
 static DWORD WINAPI mission_thread(LPVOID arg) {
@@ -534,6 +574,7 @@ static void bridge_CreateWindowExA(void) {
     g_game_hwnd = (HWND)(uintptr_t)eax;
     start_key_thread();
     start_mission_thread();
+    start_watch_mem();
     esp += 4+48;
 }
 /* Imported by this build but previously unbridged -- the old hand-written VA
