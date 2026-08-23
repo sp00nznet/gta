@@ -39,3 +39,8 @@ __pycache__/
 
 # Claude
 .claude/
+
+# Lifted code. Machine-translated from the game's own executable, so it is not
+# ours to distribute -- generate it locally with tools/run_pipeline.py.
+src/recomp/gen/
+src/recomp/gen_london69/

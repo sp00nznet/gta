@@ -16,6 +16,19 @@ find_package(OpenGL QUIET)
 # --- Collect generated recompiled sources ---
 file(GLOB GTA1_RECOMP_SOURCES "src/recomp/gen/recomp_*.c")
 
+if(NOT GTA1_RECOMP_SOURCES)
+    message(FATAL_ERROR
+        "No lifted sources in src/recomp/gen/.
+"
+        "The lifted C is generated from your own copy of the game, not shipped "
+        "with this repository. Generate it first:
+"
+        "  python tools/run_pipeline.py \"<path to>/Grand Theft Auto.exe\" "
+        "--all --split 500 --functions-json config/functions_gta1.json
+"
+        "  python tools/soften_fatal.py")
+endif()
+
 # --- GTA1 target ---
 add_executable(gta1
     # Engine core

@@ -111,7 +111,22 @@ GTA2 evolves it onto DirectX 6, with similar file formats and game logic.
 - SDL2 (optional -- stubs are used when it is not found)
 - The [pcrecomp](https://github.com/sp00nznet/pcrecomp) toolkit
 
-**Build**
+**Step 1: lift the game**
+
+This repository ships no lifted code. The C under `src/recomp/gen/` is
+machine-translated from the game's own executable, so it is not ours to
+distribute -- you generate it from your copy. Budget about an hour; the
+disassembler makes five discovery passes over the binary.
+
+```bash
+python tools/run_pipeline.py "game/extracted_full/WINO/Grand Theft Auto.exe" --all --split 500 --functions-json config/functions_gta1.json
+python tools/soften_fatal.py
+```
+
+That writes 2,590 functions as ~950k lines of C into `src/recomp/gen/`. Re-run it
+after any change to the pcrecomp lifter.
+
+**Step 2: build**
 
 ```bash
 cmake -B build -G "Visual Studio 17 2022" -A Win32
@@ -119,13 +134,6 @@ cmake --build build --config Release
 ```
 
 Add `-DGTA_TRACE=ON` for the crash trace ring.
-
-**Re-lift** (only needed after a toolkit change; takes about an hour)
-
-```bash
-python tools/run_pipeline.py "game/extracted_full/WINO/Grand Theft Auto.exe" --all --split 500 --functions-json config/functions_gta1.json
-python tools/soften_fatal.py
-```
 
 ## Game Data
 
@@ -171,8 +179,8 @@ src/
   sound/        SDL2 audio replacing Miles Sound System
   renderer/     Modern OpenGL 4.x, replacing SciTech MGL (not yet wired)
   net/          Network play replacing DirectPlay (stub)
-  recomp/gen/           Lifted GTA1   -- 2,590 functions, 952,581 lines
-  recomp/gen_london69/  Lifted London -- 2,137 functions, 205,665 lines
+  recomp/gen/           Lifted GTA1   -- 2,590 functions, 952,581 lines (generated)
+  recomp/gen_london69/  Lifted London -- 2,137 functions, 205,665 lines (generated)
 tools/
   run_pipeline.py   Analysis, discovery, lifting, code generation
   soften_fatal.py   Post-lift patch so one failed check does not hide the rest
@@ -209,12 +217,14 @@ docs/
 The code in this repository is released under the [MIT License](LICENSE).
 
 That covers **this project's own source** -- the runtime, the IAT bridges, the
-DirectDraw, Miles and Smacker shims, the launcher and the tooling. It does **not**
-cover Grand Theft Auto itself. The game's binary, assets and data remain the
-property of their owners and are not distributed here, and the lifted C under
-`src/recomp/gen*/` is machine-translated from the original executable, so it
-carries whatever rights that executable does -- it is generated on your machine,
-from your copy, and is not ours to license.
+DirectDraw, Miles and Smacker shims, the launcher and the tooling. Everything in
+this repository is code written for this project.
+
+It does **not** cover Grand Theft Auto itself. The game's binary, assets and data
+remain the property of their owners and are not distributed here. Neither is the
+lifted C: that is machine-translated from the original executable and carries
+whatever rights the executable does, so it is generated on your machine, from
+your copy, and never checked in.
 
 ## Legal
 
