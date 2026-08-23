@@ -1,180 +1,136 @@
 # Grand Theft Auto -- Static Recompilation
 
-Static recompilation of the original **Grand Theft Auto** (1997), **GTA London 1969/1961**, and **Grand Theft Auto 2** (1999) for modern Windows (x86-64).
+A static recompilation of the original **Grand Theft Auto** (1997) by DMA Design,
+targeting modern Windows. No emulation: the original x86 machine code is lifted
+to compilable C, linked against modern replacements for the legacy APIs, and
+compiled into a native executable.
 
-No emulation. The original x86 machine code is lifted to compilable C, linked against modern replacements for legacy APIs (SDL2 for windowing/input/audio, OpenGL 4.x for rendering), and compiled into a native executable.
+It renders.
+
+![The Grand Theft Auto title screen, rendered by the recompiled executable](docs/title_screen.png)
+
+*Frame 120 of a 200-frame capture. 552,201 of 614,400 bytes non-zero, 15,255
+distinct colours, no crash. Every pixel comes from the game's own code -- the
+recompiled MGL software renderer drawing into a surface the port hands it, then
+blitting that surface to the primary through a DirectDraw shim built out of our
+own COM vtables.*
+
+## Project Status
+
+| Phase | Status | Description |
+|-------|--------|-------------|
+| **Phase 0** | **Complete** | Binary analysis, PE parsing, installer extraction |
+| **Phase 1** | **Complete** | Function discovery -- 2,590 functions over five rounds |
+| **Phase 2** | **Complete** | Classification: import callers vs. pure game logic |
+| **Phase 3** | **Complete** | x86-to-C lifting -- 952,581 lines of C, 0 errors |
+| **Phase 4** | **Complete** | Compilation and linking |
+| **Phase 5** | **Complete** | Runtime bringup -- CRT init, import bridging, WinMain |
+| **Phase 6** | **Complete** | Win32/DirectDraw HAL -- COM shim, 75 vtable slots, window and surfaces |
+| **Phase 7** | **In Progress** | **Visible frames** -- the title screen renders and holds. Remaining: input to the front end, mission selection, in-game rendering |
+
+## What Works Today
+
+The recompiled binary runs the game's own code from its CRT entry point to a
+rendered title screen:
+
+- **Maps at `0x400000`**, its original image base, through a self-relaunching
+  launcher -- so every absolute address in the lifted code is simply correct
+- **Enters through the lifted CRT startup**: heap, stdio, locale and codepage
+  tables, argv, environment, then WinMain
+- **All 166 imports bound by name** from the image's own import table
+- **Reads its own data files** out of `..\gtadata\`, extracted from the original
+  InstallShield cabinets
+- **Creates its window**, negotiates a cooperative level and display mode, and
+  gets a primary surface with a back buffer
+- **Drives our DirectDraw**: `EnumDisplayModes`, `CreateSurface`, `Lock`/`Unlock`,
+  `CreatePalette`/`SetEntries`, `Blt`/`BltFast`, `Flip` -- 75 slots across four
+  interfaces, each a bridge cookie in a vtable built in game memory
+- **Plays its intro path** through the Smacker and Miles shims
+- **Renders**: 200 frames captured, no crash, running until the watchdog stops it
+
+It holds on the title screen. The front end waits on input the port does not
+deliver yet.
+
+## The Interesting Bugs
+
+A recompilation fails a long way from its cause, so these are worth recording.
+
+**Every zero looked negative.** The game asked for `..\GTADATA\AUDIO\LEVEL-00.RAW`
+when the format string is `LEVEL%03d` and the file on disk is `LEVEL000.RAW`.
+`%03d` of zero should print `000`; the port printed `-00`. The lifted `_output`
+decides sign with `test edx,edx / jg / jl`, and the second of those two jumps sat
+in a different basic block from the compare -- where the lifter had discarded
+what set the flags and fell back to a stale carry. One branch, and every zero the
+CRT ever formatted came out negative.
+
+**One in nine functions started in the wrong place.** Blocks were emitted
+lowest-address-first, and a function whose entry is not its lowest-addressed
+block -- one sharing a body with a jump-table arm or a common tail -- began
+executing in the wrong block. 295 of 2,590 functions, 11%, running code that was
+never called.
+
+**Flags that no single instruction set.** MSVC's signed-modulo idiom
+(`and / jns / dec / or / inc / je`) reaches its final `je` from two predecessors
+that set the flags with *different* instructions, so no static pairing exists.
+474 branches were in that position. They now record which *kind* of instruction
+wrote the operand snapshot and settle the condition at runtime, exactly.
+
+Those three shared one symptom -- a conditional branch reading whatever carry
+happened to be lying around -- and together accounted for 598 branches in GTA1
+alone. Fixing them took the game from a failed display init to a title screen.
+
+**Four bytes, one million times.** `AIL_ms_count` is `@0`, not `@4`; the bridge
+popped one argument too many. The game busy-waits on it, so the stack pointer
+climbed four bytes per call until it walked off the top of the simulated stack.
+The exe's own decorated import names had said `@0` all along.
+
+The full log is in [docs/BRINGUP.md](docs/BRINGUP.md), including the two theories
+that were confidently wrong.
 
 ## Supported Games
 
-| Game | Year | Executable | Code Size | Compiler | Date | Status |
-|------|------|-----------|----------|----------|------|--------|
-| Grand Theft Auto | 1997 | `Grand Theft Auto.exe` | 677 KB | MSVC 6.0 | 2002-11-11 | **Builds & runs** |
-| Grand Theft Auto | 1997 | `gtawin.exe` (original) | 748 KB | MSVC 4.2 | 1997-10-10 | Analyzed |
-| GTA London 1969 | 1999 | `gta_uk.exe` | 989 KB | MSVC 5.1 | 1999-03-12 | **Lifted** |
-| GTA London 1961 | 1999 | `GTA_61.exe` | 992 KB | MSVC 5.1 | 1999-06-25 | Analyzed |
-| Grand Theft Auto 2 | 1999 | `gta2.exe` | 609 KB (TAC packed) | MSVC 5.1 | 1999-12-13 | Blocked (packed) |
+| Game | Year | Executable | Compiler | Status |
+|------|------|-----------|----------|--------|
+| Grand Theft Auto | 1997 | `Grand Theft Auto.exe` | MSVC 6.0 | **Renders** |
+| Grand Theft Auto | 1997 | `gtawin.exe` (original) | MSVC 4.2 | Analyzed |
+| GTA London 1969 | 1999 | `gta_uk.exe` | MSVC 5.1 | **Lifted** (2,137 functions) |
+| GTA London 1961 | 1999 | `GTA_61.exe` | MSVC 5.1 | Analyzed |
+| Grand Theft Auto 2 | 1999 | `gta2.exe` | MSVC 5.1 | Blocked (TAC-packed) |
 
-All games share the **Race'n'Chase Game Engine** developed by Mike Dailly at DMA Design. GTA1 and GTA London use the identical engine (London is a mission pack). GTA2 is an evolution with upgraded rendering (DirectX 6/Direct3D) but very similar file formats and game logic. All Windows executables export the same 23 `glWindowPos*MESA` functions (embedded SciTech MGL/Mesa renderer) except GTA2 which uses DirectX.
-
-**Note:** GTA2 is TAC-packed (The Anti-Cracker) in all available versions including the official Rockstar freeware release. Runtime dump or dedicated unpacking needed.
-
-## Architecture
-
-The recompilation targets a shared engine core with game-specific modules:
-
-```
-src/
-  common/       # Shared types, math, memory model
-  engine/       # Recomp runtime, IAT bridges, main entry point
-  renderer/     # Modern OpenGL 4.x replacing SciTech MGL (GTA1) / DirectDraw (GTA2)
-  sound/        # SDL2 audio replacing Miles Sound System (MSS32)
-  video/        # Modern video playback replacing Smacker (smackw32)
-  net/          # Network play replacing DirectPlay (DPLAYX)
-  recomp/gen/   # Auto-generated lifted C code (GTA1: 238K lines)
-  recomp/gen_london69/  # Auto-generated lifted C code (London: 206K lines)
-```
-
-## Binary Analysis
-
-### GTA1 (`Grand Theft Auto.exe`)
-
-| Property | Value |
-|----------|-------|
-| Format | PE32 (i386) |
-| Compiler | MSVC 6.0 (linker 6.00) |
-| Compiled | 2002-11-11 |
-| Image Base | 0x00400000 |
-| Code Size | 676,825 bytes (.text) |
-| Data Size | 3,052,184 bytes (.data) |
-| Entry Point | 0x0049DC30 (CRT startup) |
-| WinMain | 0x00437230 |
-
-**Imports (166 functions from 8 DLLs):**
-
-| DLL | Functions | Purpose | Bridge Status |
-|-----|-----------|---------|---------------|
-| KERNEL32.dll | 63 | OS services, memory, file I/O | All bridged |
-| USER32.dll | 29 | Window management, input | All bridged |
-| GDI32.dll | 20 | GDI graphics (palette management) | All bridged |
-| mss32.dll | 38 | Miles Sound System (audio) | SDL2 shim |
-| smackw32.dll | 8 | RAD Game Tools Smacker (video) | Stub (skip) |
-| ADVAPI32.dll | 4 | Registry access | All bridged |
-| WINMM.dll | 2 | Joystick input | All bridged |
-| DPLAYX.dll | 2 | DirectPlay (multiplayer) | Stub |
-
-**Exports:** 23 `glWindowPos*MESA` functions -- confirms embedded SciTech MGL/Mesa OpenGL renderer.
-
-## Progress
-
-### Phase 0: Reconnaissance
-- [x] Obtain game files (GTA1, GTA2, London 1969, London 1961)
-- [x] Extract GTA1 Windows executable from InstallShield installer
-- [x] PE analysis of all 5 executables
-- [x] Download official Rockstar freeware releases from archive.org
-- [x] Compare executables across all games
-
-### Phase 1: Disassembly
-- [x] GTA1: Recursive-descent disassembly of 676 KB .text section -- **1,957 functions**
-- [x] London 1969: Disassembly of 989 KB .text section -- **2,137 functions**
-- [x] Call graph generation
-- [ ] Cross-reference analysis
-- [ ] London 1961 disassembly
-- [ ] GTA2 (blocked: TAC-packed)
-
-### Phase 2: Classification
-- [x] IAT call analysis: 28 functions call imports, **1,869 are pure game logic**
-- [x] Identify Miles Sound System wrappers -- **4 functions**
-- [x] Identify Smacker video wrappers -- **1 function**
-- [x] Identify GDI/rendering functions -- **1 function**
-- [x] Identify KERNEL32/CRT callers -- **25 functions**
-- [ ] Deep classification (CRT vs custom via pattern matching)
-- [ ] Identify SciTech MGL rendering functions (embedded, not via IAT)
-
-### Phase 3: Code Lifting (x86 -> C)
-- [x] GTA1: **1,957 functions -> 238,119 lines of C, 0 errors**
-- [x] London 1969: **2,137 functions -> 205,665 lines of C, 0 errors**
-- [x] Global register model (eax-esp as C globals)
-- [x] Memory access via VA translation (MEM32 macros)
-- [x] Dispatch table for indirect calls
-- [x] Import bridge stubs for all 166 imports
-- [ ] London 1961 lifting
-- [ ] GTA2 lifting (blocked)
-
-### Phase 4: Shimming
-- [x] **IAT bridge system** -- all 167 imports bridged with correct stdcall convention
-- [x] Miles Sound System -> SDL2 audio shim (38 AIL_ functions)
-- [x] Smacker -> stub decoder (8 ordinals, skips videos)
-- [x] KERNEL32/USER32/GDI32/ADVAPI32 -> real Win32 API pass-through
-- [x] WINMM -> real Win32 joystick API pass-through
-- [x] DPLAYX -> stub (returns E_FAIL)
-- [ ] SciTech MGL -> OpenGL 4.x renderer
-- [ ] Cross-platform SDL2 windowing/input layer
-
-### Phase 5: Build & Test
-- [x] CMake build system (MSVC 2022, Win32)
-- [x] Runtime rebuilt on the pcrecomp `recomp32` contract (global registers,
-      `ADDR()`, `FS_BASE`, shared x87 stack, global `ebp`)
-- [x] **Image maps at its original base 0x400000** -- via a self-relaunching
-      launcher (see below); the offset-based fallback is gone
-- [x] Entry through the lifted CRT startup: heap, stdio, locale/codepage
-      tables, argv, environment, then WinMain
-- [x] All 166 imports bound **by name** from the image's own import table
-- [x] DirectDraw shim: the game drives our own COM vtables
-- [x] Registry shim for `HKLM\SOFTWARE\DMA Design\Grand Theft Auto`
-- [x] **Game opens and reads its own data files** (`..\gtadata\english.fxt`)
-- [ ] First frame rendered
-
-### How it gets 0x400000
-
-Nothing running inside the process can claim the original image base. An 8 MB
-`/STACK` reserve lands the host's own main-thread stack there; with that reduced,
-kernel32 maps `C_437.NLS`, `l_intl.nls` and the first CRT heap segments through
-the range before a TLS callback can run.
-
-So `gta1.exe` launches itself. The parent creates the child `CREATE_SUSPENDED` --
-at which point only ntdll, the image and the stack exist -- reserves the range
-with `VirtualAllocEx`, and resumes. The child's loader then places NLS and the
-heap elsewhere, and the image is *committed into* that reservation rather than
-released first, because releasing leaves a hole the loader's own `malloc` falls
-into.
-
-### Diagnostics
-
-The bugs in a recompilation surface a long way from their cause, so the runtime
-carries its own instruments:
-
-| Variable | What it does |
-|---|---|
-| `GTA_TRACE` (CMake `-DGTA_TRACE=ON`) | ring of the last 1024 functions entered, with esp and ecx, dumped on a crash |
-| `GTA_WATCHDOG_MS=n` | dumps the trace and exits after n ms -- a hang is otherwise indistinguishable from success |
-| `GTA_WATCH=0x48dd40,...` | prints esp, ecx and the first four stack arguments on entry to named functions |
-| `GTA_BRIDGE_ESP=1` | reports what each IAT bridge actually moved esp by (it should be exactly `4*argc`) |
-
-The runtime also prints the game's own error buffer and decodes its
-`FatalError(msgId, line, ...)` calls, whose line number names the failing check.
+All of these share the **Race'n'Chase** engine, written by Mike Dailly at DMA
+Design. GTA1 and GTA London run the identical engine -- London is a mission pack.
+GTA2 evolves it onto DirectX 6, with similar file formats and game logic.
 
 ## Building
 
-### Requirements
+**Requirements**
 
 - CMake 3.20+
-- Visual Studio 2022 (MSVC)
-- SDL2 (optional -- stubs used when not found)
-- Python 3.10+ (for analysis tools)
-- [pcrecomp](https://github.com/sp00nznet/pcrecomp) toolkit
+- Visual Studio 2022 (MSVC), Win32 target
+- Python 3.10+ with `capstone` and `pefile`
+- SDL2 (optional -- stubs are used when it is not found)
+- The [pcrecomp](https://github.com/sp00nznet/pcrecomp) toolkit
 
-### Build
+**Build**
 
 ```bash
 cmake -B build -G "Visual Studio 17 2022" -A Win32
 cmake --build build --config Release
 ```
 
-### Game data
+Add `-DGTA_TRACE=ON` for the crash trace ring.
 
-The recompiled executable needs the original game's data, and the copy in
-`game/extracted/` is a stub -- 171 of its 173 files are zero bytes. Extract the
-real data from the installer cabinets:
+**Re-lift** (only needed after a toolkit change; takes about an hour)
+
+```bash
+python tools/run_pipeline.py "game/extracted_full/WINO/Grand Theft Auto.exe" --all --split 500 --functions-json config/functions_gta1.json
+python tools/soften_fatal.py
+```
+
+## Game Data
+
+You supply your own copy of the game. Extract the real data from the installer
+cabinets:
 
 ```bash
 python ../tools/tools/assets/isextract.py game/data1.cab game/data1.cab -o game/extracted_full
@@ -182,9 +138,10 @@ python ../tools/tools/assets/isextract.py game/data1.cab game/data1.cab -o game/
 
 The archive spans `data1.cab` and `data2.cab`; the extractor discovers both and
 reports the split (`Volumes: data1.cab [0..17], data2.cab [17..194]`). All 195
-files should extract with no errors.
+files should extract with no errors. The stub copy in `game/extracted/` is not
+usable -- 171 of its 173 files are zero bytes.
 
-### Run
+## Running
 
 ```bash
 cd game/extracted_full/WINO
@@ -193,23 +150,104 @@ cd game/extracted_full/WINO
 
 Run from the directory holding the executable: the game resolves its data as
 `..\gtadata\`, relative to its own location. The original executable is the
-argument -- it is mapped at 0x400000 so the lifted code can read its `.rdata`
+argument -- it is mapped at `0x400000` so the lifted code can read its `.rdata`
 and `.data`.
+
+To capture frames:
+
+```bash
+GTA_DUMP_FRAMES=200 GTA_WATCHDOG_MS=60000 gta1.exe "Grand Theft Auto.exe"
+```
+
+The other diagnostic switches are listed in [docs/BRINGUP.md](docs/BRINGUP.md).
+
+## Architecture
+
+```
+src/
+  common/       Shared types, math, memory model
+  engine/       Recomp runtime, IAT bridges, image loader, premap launcher
+  video/        DirectDraw shim, Smacker shim
+  sound/        SDL2 audio replacing Miles Sound System
+  renderer/     Modern OpenGL 4.x, replacing SciTech MGL (not yet wired)
+  net/          Network play replacing DirectPlay (stub)
+  recomp/gen/           Lifted GTA1   -- 2,590 functions, 952,581 lines
+  recomp/gen_london69/  Lifted London -- 2,137 functions, 205,665 lines
+tools/
+  run_pipeline.py   Analysis, discovery, lifting, code generation
+  soften_fatal.py   Post-lift patch so one failed check does not hide the rest
+config/
+  functions_gta1.json   Discovered function list
+docs/
+  TECHNICAL.md   Engine, binary, formats, import surface
+  BRINGUP.md     How it gets 0x400000, diagnostics, the fix log
+  PROGRESS.md    Phase-by-phase detail and known gaps
+```
 
 ## Statistics
 
 | Metric | Value |
 |--------|-------|
 | Functions lifted (GTA1) | **2,590** |
+| Lines of generated C | **952,581** |
 | Lifting errors | **0** |
 | Imports bound by name | **166 of 166** |
 | DirectDraw methods served | 75 vtable slots |
+| Stale-flag branches remaining | **0** (was 598) |
 | Game executables analyzed | 5 |
+
+## Documentation
+
+- [docs/TECHNICAL.md](docs/TECHNICAL.md) -- the Race'n'Chase engine, GTA1's PE
+  layout, subsystems, data formats, import surface, MGL notes
+- [docs/BRINGUP.md](docs/BRINGUP.md) -- how the image gets its original base, the
+  diagnostic switches, and the full fix log
+- [docs/PROGRESS.md](docs/PROGRESS.md) -- phase checklists and known gaps
+
+## License
+
+The code in this repository is released under the [MIT License](LICENSE).
+
+That covers **this project's own source** -- the runtime, the IAT bridges, the
+DirectDraw, Miles and Smacker shims, the launcher and the tooling. It does **not**
+cover Grand Theft Auto itself. The game's binary, assets and data remain the
+property of their owners and are not distributed here, and the lifted C under
+`src/recomp/gen*/` is machine-translated from the original executable, so it
+carries whatever rights that executable does -- it is generated on your machine,
+from your copy, and is not ours to license.
 
 ## Legal
 
-This project contains no copyrighted game assets. You must supply your own copy of the original game(s). The recompilation tools and runtime are MIT licensed.
+This project is for game preservation purposes. You must supply your own copy of
+the game. No copyrighted game assets are included in this repository.
+
+Rockstar Games have made Grand Theft Auto and Grand Theft Auto 2 freely available
+for years, which is the only reason this project targets them rather than a title
+still being sold. If the rights holders would prefer this not exist, say so and
+it comes down.
 
 ## Credits
 
-Built with [pcrecomp](https://github.com/sp00nznet/pcrecomp) -- the unified PC static recompilation toolkit.
+The game itself is the work of **DMA Design** -- **Mike Dailly** wrote the
+Race'n'Chase engine this recompilation is built on, and it is a genuinely good
+piece of 1990s engineering to read. Published by BMG Interactive, now
+**Rockstar Games**, who released it as freeware.
+
+Standing on:
+
+- [pcrecomp](https://github.com/sp00nznet/pcrecomp) -- the unified PC static
+  recompilation toolkit this project shares with its siblings
+- [Capstone](https://www.capstone-engine.org/) -- disassembly
+- [SDL2](https://libsdl.org/) -- audio, and eventually windowing and input
+- **SciTech Software** for MGL and **RAD Game Tools** for Smacker and the Miles
+  Sound System -- the libraries being stood in for here
+
+## Related Projects
+
+Part of the [sp00nznet](https://github.com/sp00nznet) recompilation collection:
+
+- [xwa](https://github.com/sp00nznet/xwa) -- X-Wing Alliance, D3D11 backend and
+  3D flight
+- [burnout3](https://github.com/sp00nznet/burnout3) -- original Xbox x86 recomp
+- [bw](https://github.com/sp00nznet/bw) -- Black & White, Win32 game patterns
+- [civ](https://github.com/sp00nznet/civ) -- Civilization, 16-bit x86 lifting

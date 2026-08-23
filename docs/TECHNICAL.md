@@ -102,3 +102,52 @@ GTA2 upgrades the engine with:
 - Similar but evolved file formats
 
 The rendering subsystem is substantially different and will require a separate implementation, but game logic, physics, and file I/O code should share significant structure with GTA1.
+
+## Import Surface (GTA1)
+
+166 functions from 8 DLLs.
+
+| DLL | Functions | Purpose | Bridge |
+|-----|-----------|---------|--------|
+| KERNEL32.dll | 63 | OS services, memory, file I/O | Real Win32 pass-through |
+| USER32.dll | 29 | Window management, input | Real Win32 pass-through |
+| GDI32.dll | 20 | GDI graphics, palette management | Real Win32 pass-through |
+| mss32.dll | 38 | Miles Sound System | SDL2 shim |
+| smackw32.dll | 8 | RAD Game Tools Smacker | Shim |
+| ADVAPI32.dll | 4 | Registry access | Synthetic registry |
+| WINMM.dll | 2 | Joystick input | Real Win32 pass-through |
+| DPLAYX.dll | 2 | DirectPlay multiplayer | Stub (`E_FAIL`) |
+
+Bridges are bound **by name**, read from the image's own import table, which is
+why the PE headers are mapped along with the sections. Binding by index put 30
+of them on the wrong slot.
+
+`mss32.dll` imports are decorated stdcall names carrying their byte count
+(`_AIL_ms_count@0`), which makes the exe itself the authority on each bridge's
+arity -- worth using, since an over-popping bridge in a busy-wait loop walks the
+stack pointer off the top of the stack.
+
+## Executables Analyzed
+
+| Game | Year | Executable | Code Size | Compiler | Build Date |
+|------|------|-----------|----------|----------|------------|
+| Grand Theft Auto | 1997 | `Grand Theft Auto.exe` | 677 KB | MSVC 6.0 | 2002-11-11 |
+| Grand Theft Auto | 1997 | `gtawin.exe` (original) | 748 KB | MSVC 4.2 | 1997-10-10 |
+| GTA London 1969 | 1999 | `gta_uk.exe` | 989 KB | MSVC 5.1 | 1999-03-12 |
+| GTA London 1961 | 1999 | `GTA_61.exe` | 992 KB | MSVC 5.1 | 1999-06-25 |
+| Grand Theft Auto 2 | 1999 | `gta2.exe` | 609 KB (TAC packed) | MSVC 5.1 | 1999-12-13 |
+
+Every Windows executable exports the same 23 `glWindowPos*MESA` functions,
+confirming the embedded SciTech MGL/Mesa renderer -- except GTA2, which moved to
+DirectX.
+
+## MGL Notes
+
+The MGL drivers (`DDRAW8.DRV` and friends) are linked into the executable rather
+than loaded, so none of the renderer is visible through the IAT. The mode table
+lives at `0x7878C0`: 87 entries of two bytes each, `0xFF` marking a mode as
+unavailable. The runtime prints the surviving list on a fault, which is how the
+mode negotiation was worked out.
+
+MGL asks for both 8- and 16-bit surfaces at each resolution and will refuse a
+mode list offering only one of them.
