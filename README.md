@@ -111,23 +111,47 @@ src/
 - [ ] Cross-platform SDL2 windowing/input layer
 
 ### Phase 5: Build & Test
-- [x] CMake build system (MSVC 2022, Win32, /BASE:0x10000000)
-- [x] Runtime: VirtualAlloc memory mapping, VEH crash handler, ICALL trace
-- [x] **First successful build** -- 1.7 MB native Win32 executable
-- [x] **First test launch** -- game executes WinMain, passes mutex check
-- [x] Game reaches CreateMutexA("Grand Theft Auto"), RegOpenKeyExA
-- [ ] Fix memory mapping (0x400000 conflict with CRT heap reservation)
-- [ ] Get past renderer initialization
+- [x] CMake build system (MSVC 2022, Win32)
+- [x] Runtime rebuilt on the pcrecomp `recomp32` contract (global registers,
+      `ADDR()`, `FS_BASE`, shared x87 stack, global `ebp`)
+- [x] **Image maps at its original base 0x400000** -- via a self-relaunching
+      launcher (see below); the offset-based fallback is gone
+- [x] Entry through the lifted CRT startup: heap, stdio, locale/codepage
+      tables, argv, environment, then WinMain
+- [x] All 166 imports bound **by name** from the image's own import table
+- [x] DirectDraw shim: the game drives our own COM vtables
+- [x] Registry shim for `HKLM\SOFTWARE\DMA Design\Grand Theft Auto`
+- [x] **Game opens and reads its own data files** (`..\gtadata\english.fxt`)
 - [ ] First frame rendered
 
-### Current Blocker
+### How it gets 0x400000
 
-VirtualAlloc at the original image base (0x400000) fails because the CRT heap
-reserves that range before `main()`. The fallback offset-based mapping works for
-data reads but breaks pointer arithmetic in the recompiled code. Options:
-1. TLS callback to pre-reserve 0x400000 (implemented, not yet working)
-2. Launcher process that maps memory before starting the recomp exe
-3. Fix pointer translation in generated code
+Nothing running inside the process can claim the original image base. An 8 MB
+`/STACK` reserve lands the host's own main-thread stack there; with that reduced,
+kernel32 maps `C_437.NLS`, `l_intl.nls` and the first CRT heap segments through
+the range before a TLS callback can run.
+
+So `gta1.exe` launches itself. The parent creates the child `CREATE_SUSPENDED` --
+at which point only ntdll, the image and the stack exist -- reserves the range
+with `VirtualAllocEx`, and resumes. The child's loader then places NLS and the
+heap elsewhere, and the image is *committed into* that reservation rather than
+released first, because releasing leaves a hole the loader's own `malloc` falls
+into.
+
+### Diagnostics
+
+The bugs in a recompilation surface a long way from their cause, so the runtime
+carries its own instruments:
+
+| Variable | What it does |
+|---|---|
+| `GTA_TRACE` (CMake `-DGTA_TRACE=ON`) | ring of the last 1024 functions entered, with esp and ecx, dumped on a crash |
+| `GTA_WATCHDOG_MS=n` | dumps the trace and exits after n ms -- a hang is otherwise indistinguishable from success |
+| `GTA_WATCH=0x48dd40,...` | prints esp, ecx and the first four stack arguments on entry to named functions |
+| `GTA_BRIDGE_ESP=1` | reports what each IAT bridge actually moved esp by (it should be exactly `4*argc`) |
+
+The runtime also prints the game's own error buffer and decodes its
+`FatalError(msgId, line, ...)` calls, whose line number names the failing check.
 
 ## Building
 
@@ -146,24 +170,40 @@ cmake -B build -G "Visual Studio 17 2022" -A Win32
 cmake --build build --config Release
 ```
 
+### Game data
+
+The recompiled executable needs the original game's data, and the copy in
+`game/extracted/` is a stub -- 171 of its 173 files are zero bytes. Extract the
+real data from the installer cabinets:
+
+```bash
+python ../tools/tools/assets/isextract.py game/data1.cab game/data1.cab -o game/extracted_full
+```
+
+The archive spans `data1.cab` and `data2.cab`; the extractor discovers both and
+reports the split (`Volumes: data1.cab [0..17], data2.cab [17..194]`). All 195
+files should extract with no errors.
+
 ### Run
 
 ```bash
-build/bin/Release/gta1.exe path/to/Grand Theft Auto.exe
+cd game/extracted_full/WINO
+/path/to/build/bin/Release/gta1.exe "Grand Theft Auto.exe"
 ```
 
-The original executable is needed for loading .data/.rdata sections into
-the memory-mapped address space.
+Run from the directory holding the executable: the game resolves its data as
+`..\gtadata\`, relative to its own location. The original executable is the
+argument -- it is mapped at 0x400000 so the lifted code can read its `.rdata`
+and `.data`.
 
 ## Statistics
 
 | Metric | Value |
 |--------|-------|
-| Total functions lifted | **4,094** |
-| Total lines of C | **443,784** |
+| Functions lifted (GTA1) | **2,590** |
 | Lifting errors | **0** |
-| IAT bridges | **167** |
-| Build output | 1.7 MB native Win32 exe |
+| Imports bound by name | **166 of 166** |
+| DirectDraw methods served | 75 vtable slots |
 | Game executables analyzed | 5 |
 
 ## Legal
