@@ -225,6 +225,25 @@ static void dump_game_error(void) {
     const char *prev = (const char *)(uintptr_t)ADDR(0x50F4B8u);
     if (msg[0])  fprintf(stderr, "  game error:    \"%.200s\"\n", msg);
     if (prev[0]) fprintf(stderr, "  previous error: \"%.200s\"\n", prev);
+
+    /*
+     * MGL's mode table: 87 entries of two bytes at 0x7878C0, indexed by mode
+     * number, 0xFF meaning unavailable. Each linked-in driver's detect function
+     * fills it in. The game asks for mode 0x13 and gives up quietly when it is
+     * absent, so knowing which modes actually registered is the difference
+     * between "the driver ran" and "the driver found nothing".
+     */
+    {
+        int i, found = 0;
+        fprintf(stderr, "  MGL modes available:");
+        for (i = 0; i < 87; i++) {
+            if (MEM8(0x7878C0u + (uint32_t)i * 2) != 0xFF) {
+                fprintf(stderr, " 0x%02X", i);
+                found++;
+            }
+        }
+        fprintf(stderr, found ? "\n" : " (none)\n");
+    }
 }
 
 void recomp_dump_trace(const char *why) {

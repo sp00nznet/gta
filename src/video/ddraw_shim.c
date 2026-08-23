@@ -116,6 +116,14 @@ static int g_surf_count;
 
 static PALETTEENTRY g_pal[256];
 
+/*
+ * The depth the game actually asked for via SetDisplayMode. Surfaces have to
+ * match it: GTA sets 640x480x8 and then writes palette indices, so allocating
+ * and presenting them as 16-bit gets both the size and the format wrong.
+ */
+static u32 g_mode_bpp = SCREEN_BPP;
+static int g_dd_trace = -1;
+
 extern u32 g_bridge_hit;
 extern u32 recomp_alloc_bridge(const char *name, void (*handler)(void));
 
@@ -244,8 +252,8 @@ static u32 create_surface(u32 desc_va) {
     if (g_surf_count >= MAX_SURFACES) return 0;
     i = g_surf_count++;
     g_surf[i].obj        = make_object(IF_SURFACE);
-    g_surf[i].bpp        = SCREEN_BPP;
-    g_surf[i].bits       = recomp_scratch_alloc(w * h * (SCREEN_BPP / 8));
+    g_surf[i].bpp        = g_mode_bpp;
+    g_surf[i].bits       = recomp_scratch_alloc(w * h * (g_mode_bpp / 8));
     g_surf[i].w          = w;
     g_surf[i].h          = h;
     g_surf[i].caps       = caps;
@@ -260,8 +268,8 @@ static u32 create_surface(u32 desc_va) {
     if (back && g_surf_count < MAX_SURFACES) {
         int b = g_surf_count++;
         g_surf[b].obj        = make_object(IF_SURFACE);
-        g_surf[b].bpp        = SCREEN_BPP;
-        g_surf[b].bits       = recomp_scratch_alloc(w * h * (SCREEN_BPP / 8));
+        g_surf[b].bpp        = g_mode_bpp;
+        g_surf[b].bits       = recomp_scratch_alloc(w * h * (g_mode_bpp / 8));
         g_surf[b].w          = w;
         g_surf[b].h          = h;
         g_surf[b].caps       = DDSCAPS_BACKBUFFER;
@@ -275,9 +283,19 @@ static u32 create_surface(u32 desc_va) {
 }
 
 static void enum_display_modes(u32 ctx, u32 callback) {
-    static const struct { u32 w, h; } modes[] = {
-        { 320, 200 }, { 320, 240 }, { 640, 400 },
-        { 640, 480 }, { 800, 600 }, { 1024, 768 },
+    /*
+     * MGL numbers its modes by resolution AND depth, and the game asks for a
+     * specific number (0x13). Offering one depth registers only that slice of
+     * the table, so advertise both 8- and 16-bit for each resolution and let
+     * MGL's driver pick.
+     */
+    static const struct { u32 w, h, bpp; } modes[] = {
+        { 320, 200,  8 }, { 320, 200, 16 },
+        { 320, 240,  8 }, { 320, 240, 16 },
+        { 640, 400,  8 }, { 640, 400, 16 },
+        { 640, 480,  8 }, { 640, 480, 16 },
+        { 800, 600,  8 }, { 800, 600, 16 },
+        { 1024, 768, 8 }, { 1024, 768, 16 },
     };
     const int n = (int)(sizeof(modes) / sizeof(modes[0]));
     u32 desc = recomp_scratch_alloc(SD_DESC_SIZE);
@@ -285,12 +303,12 @@ static void enum_display_modes(u32 ctx, u32 callback) {
 
     for (i = 0; i < n; i++) {
         u32 args[2];
-        write_surface_desc(desc, modes[i].w, modes[i].h, 0, 0, SCREEN_BPP);
+        write_surface_desc(desc, modes[i].w, modes[i].h, 0, 0, modes[i].bpp);
         args[0] = desc;
         args[1] = ctx;
         if (call_game(callback, args, 2) != DDENUMRET_OK) break;
     }
-    fprintf(stderr, "  DDRAW: EnumDisplayModes offered %d %u-bit modes\n", i, SCREEN_BPP);
+    fprintf(stderr, "  DDRAW: EnumDisplayModes offered %d modes (%u-bit surfaces)\n", i, SCREEN_BPP);
 }
 
 /* One handler behind every vtable slot; g_bridge_hit says which. */
@@ -301,6 +319,19 @@ static void shim_dispatch(void) {
     int argc  = k_argc[iface][slot];
     u32 ret   = DD_OK;
     int si, i;
+
+    /*
+     * GTA_DDRAW_TRACE names the method, not just the interface. The bridge log
+     * only says "IDirectDraw", and where MGL stops asking is the whole
+     * diagnosis -- seeing Lock/Unlock/SetPalette arrive is how we know the
+     * render path runs at all.
+     */
+    if (g_dd_trace < 0) {
+        char buf[8];
+        g_dd_trace = GetEnvironmentVariableA("GTA_DDRAW_TRACE", buf, sizeof(buf)) ? 1 : 0;
+    }
+    if (g_dd_trace)
+        fprintf(stderr, "    DD %s::slot%d (0x%02X)\n", k_iface_name[iface], slot, slot * 4);
 
     switch (iface) {
 
@@ -339,6 +370,7 @@ static void shim_dispatch(void) {
                     ARG(2), ARG(3));
             break;
         case 21: /* SetDisplayMode(dwWidth, dwHeight, dwBPP) */
+            if (ARG(4) == 8 || ARG(4) == 16 || ARG(4) == 32) g_mode_bpp = ARG(4);
             fprintf(stderr, "  DDRAW: SetDisplayMode %ux%ux%u\n", ARG(2), ARG(3), ARG(4));
             break;
         default:
