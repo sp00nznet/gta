@@ -34589,8 +34589,8 @@
     "address_int": 4841696,
     "name": "sub_0049E0E0",
     "size": 821,
-    "num_blocks": 33,
-    "num_instructions": 136,
+    "num_blocks": 45,
+    "num_instructions": 214,
     "is_thunk": false,
     "calls_to": []
   },
@@ -34688,8 +34688,8 @@
     "address_int": 4842992,
     "name": "sub_0049E5F0",
     "size": 821,
-    "num_blocks": 33,
-    "num_instructions": 136,
+    "num_blocks": 45,
+    "num_instructions": 214,
     "is_thunk": false,
     "calls_to": []
   },
