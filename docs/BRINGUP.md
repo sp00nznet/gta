@@ -45,7 +45,7 @@ carries its own instruments.
 | `GTA_MISSION=n` | holds the mission-number global at n, bypassing the front end's choice |
 | `GTA_AUDIO_TRACE=1` | mixer voice count and peak level once a second, plus every sample start |
 | `GTA_AUDIO_MUTE=1` | mix as normal but output silence -- headless runs should not blast the machine |
-| `GTA_AUDIO_DUMP=mix.wav` | write the mixed output to a WAV, so it can be measured or listened to later |
+| `GTA_AUDIO_DUMP=mix.wav` | write the mixed output to a playable WAV, so it can be measured or listened to later |
 
 The runtime also prints the game's own error buffer and decodes its
 `FatalError(msgId, line, ...)` calls, whose line number names the failing check.
@@ -297,3 +297,11 @@ does not distinguish sound from noise; the dumped mix does:
 | zero-crossing rate | noise-like | **0.086** (white noise is ~0.5) |
 | peak / RMS | pinned | 7058 / 898, crest 7.9 |
 | clipped samples | constant | **0.000%** |
+
+The dump header is re-stamped as the file grows rather than written once at the
+end, because these runs are normally ended by the watchdog killing the process
+-- a header written at shutdown never gets written at all. The first version of
+it left the RIFF size, the data size and the byte-rate field all zero, which no
+player will open, and which the analysis above did not catch: that reads the PCM
+directly from offset 44 and never parses the header, so it was measuring the
+right samples through a container no player would accept.
