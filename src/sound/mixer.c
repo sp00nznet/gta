@@ -36,7 +36,7 @@ static int   g_peak;
 static int   g_mute;
 static FILE *g_dump;
 static u32   g_dump_bytes;
-static int   g_final_shutdown;
+static int   g_dump_ticks;
 
 #ifdef _WIN32
 static HWAVEOUT   g_dev;
@@ -50,6 +50,51 @@ static CRITICAL_SECTION g_lock;
 #define LOCK()
 #define UNLOCK()
 #endif
+
+/* Stamp a 44-byte canonical WAV header for data_bytes of PCM.
+ *
+ * Re-stamped as the dump grows rather than only at shutdown: these runs are
+ * usually ended by the watchdog killing the process, so a header written once
+ * at the end never gets written at all. The first version of this left RIFF
+ * size, data size AND the byte-rate field all zero, which no player will touch.
+ */
+static void wav_stamp(FILE *f, u32 data_bytes) {
+    unsigned char h[44];
+    u32 rate = MIXER_RATE, ch = MIXER_CHANNELS, bits = 16;
+    u32 block = ch * bits / 8, byterate = rate * block;
+    long here = ftell(f);
+
+    memset(h, 0, sizeof(h));
+    memcpy(h + 0,  "RIFF", 4);
+    h[4]  = (unsigned char)((data_bytes + 36));
+    h[5]  = (unsigned char)((data_bytes + 36) >> 8);
+    h[6]  = (unsigned char)((data_bytes + 36) >> 16);
+    h[7]  = (unsigned char)((data_bytes + 36) >> 24);
+    memcpy(h + 8,  "WAVE", 4);
+    memcpy(h + 12, "fmt ", 4);
+    h[16] = 16;
+    h[20] = 1;                                   /* PCM */
+    h[22] = (unsigned char)ch;
+    h[24] = (unsigned char)(rate);
+    h[25] = (unsigned char)(rate >> 8);
+    h[26] = (unsigned char)(rate >> 16);
+    h[28] = (unsigned char)(byterate);           /* the field that was missing */
+    h[29] = (unsigned char)(byterate >> 8);
+    h[30] = (unsigned char)(byterate >> 16);
+    h[32] = (unsigned char)block;
+    h[34] = (unsigned char)bits;
+    memcpy(h + 36, "data", 4);
+    h[40] = (unsigned char)(data_bytes);
+    h[41] = (unsigned char)(data_bytes >> 8);
+    h[42] = (unsigned char)(data_bytes >> 16);
+    h[43] = (unsigned char)(data_bytes >> 24);
+
+    fseek(f, 0, SEEK_SET);
+    fwrite(h, 1, sizeof(h), f);
+    if (here > 0) fseek(f, here, SEEK_SET);
+    else          fseek(f, 0, SEEK_END);
+    fflush(f);
+}
 
 /* One frame from a voice, as two signed 16-bit channels. */
 static void fetch(const Voice *v, u32 frame, int *l, int *r) {
@@ -127,6 +172,10 @@ static void mix_into(short *out, int frames) {
         }
         fwrite(w, sizeof(short), (size_t)frames * MIXER_CHANNELS, g_dump);
         g_dump_bytes += (u32)(frames * MIXER_CHANNELS * (int)sizeof(short));
+        if (++g_dump_ticks >= 4) {           /* keep the header within ~0.1s */
+            g_dump_ticks = 0;
+            wav_stamp(g_dump, g_dump_bytes);
+        }
     }
 
     for (i = 0; i < frames * MIXER_CHANNELS; i++) {
@@ -215,15 +264,7 @@ int mixer_init(void) {
           dump_tried = 1;
           g_dump = fopen(path, "wb");
           if (g_dump) {
-              unsigned char h[44];
-              memset(h, 0, sizeof(h));
-              memcpy(h, "RIFF", 4); memcpy(h + 8, "WAVEfmt ", 8);
-              h[16] = 16; h[20] = 1; h[22] = MIXER_CHANNELS;
-              h[24] = (unsigned char)(MIXER_RATE & 0xFF);
-              h[25] = (unsigned char)((MIXER_RATE >> 8) & 0xFF);
-              h[32] = MIXER_CHANNELS * 2; h[34] = 16;
-              memcpy(h + 36, "data", 4);
-              fwrite(h, 1, sizeof(h), g_dump);
+              wav_stamp(g_dump, 0);
               fprintf(stderr, "  MIXER: writing mix to %s\n", path);
           }
       } }
@@ -246,13 +287,9 @@ void mixer_shutdown(void) {
         free(g_buf[i]);
         g_buf[i] = NULL;
     }
-    if (g_dump && g_final_shutdown) {
-        u32 riff = g_dump_bytes + 36;
-        fseek(g_dump, 4, SEEK_SET);  fwrite(&riff, 4, 1, g_dump);
-        fseek(g_dump, 40, SEEK_SET); fwrite(&g_dump_bytes, 4, 1, g_dump);
-        fclose(g_dump);
-        g_dump = NULL;
-        fprintf(stderr, "  MIXER: mix dump closed (%u bytes)\n", g_dump_bytes);
+    if (g_dump) {
+        wav_stamp(g_dump, g_dump_bytes);       /* keep it open: MSS restarts */
+        fprintf(stderr, "  MIXER: mix dump now %u bytes\n", g_dump_bytes);
     }
     waveOutClose(g_dev);
     CloseHandle(g_event);
