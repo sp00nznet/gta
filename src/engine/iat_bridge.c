@@ -533,6 +533,22 @@ static void start_mission_thread(void) {
 
 static HWND g_game_hwnd;
 
+/*
+ * A key may be written as STATE:VK, meaning "wait until the front-end state
+ * global equals STATE, then send VK". Fixed delays cannot drive a menu: a key
+ * lands in whichever state happens to be current when the timer fires, and one
+ * slow load shifts every key after it. GTA_KEY_STATE names the global to watch
+ * (default 0x5101D0, sub_00426A50's switch variable).
+ */
+static u32 g_key_state_va = 0x5101D0u;
+
+static void wait_for_state(u32 want) {
+    int spins = 0;
+    while (MEM32(g_key_state_va) != want && spins++ < 2000)
+        Sleep(10);
+    Sleep(120);          /* let the state's first frame run */
+}
+
 static DWORD WINAPI key_thread(LPVOID arg) {
     char spec[256], buf[32];
     DWORD gap = 2000, delay = 3000;
@@ -545,14 +561,24 @@ static DWORD WINAPI key_thread(LPVOID arg) {
     if (GetEnvironmentVariableA("GTA_KEY_DELAY_MS", buf, sizeof(buf)))
         delay = (DWORD)strtoul(buf, NULL, 0);
 
+    if (GetEnvironmentVariableA("GTA_KEY_STATE", buf, sizeof(buf)))
+        g_key_state_va = (u32)strtoul(buf, NULL, 16);
+
     Sleep(delay);
     for (p = strtok(spec, ","); p; p = strtok(NULL, ",")) {
-        UINT vk = (UINT)strtoul(p, NULL, 0);
+        UINT vk;
+        char *colon = strchr(p, ':');
+        if (colon) {
+            *colon = 0;
+            wait_for_state((u32)strtoul(p, NULL, 0));
+            p = colon + 1;
+        }
+        vk = (UINT)strtoul(p, NULL, 0);
         UINT sc = MapVirtualKeyA(vk, 0 /* MAPVK_VK_TO_VSC */);
         LPARAM down = (LPARAM)(1 | (sc << 16));
         LPARAM up   = down | 0xC0000000;
         if (!vk || !g_game_hwnd) continue;
-        fprintf(stderr, "  KEYS: vk=0x%02X\n", vk);
+        fprintf(stderr, "  KEYS: vk=0x%02X (state %u)\n", vk, MEM32(g_key_state_va));
         PostMessageA(g_game_hwnd, WM_KEYDOWN, vk, down);
         Sleep(40);
         PostMessageA(g_game_hwnd, WM_KEYUP, vk, up);

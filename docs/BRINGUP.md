@@ -38,7 +38,8 @@ carries its own instruments.
 | `GTA_DDRAW_TRACE=1` | names every DirectDraw method the game calls, not just the interface |
 | `GTA_DUMP_FRAMES=n` | writes the first n presented frames to `frameNNN.bmp`, with a count of non-zero bytes |
 | `GTA_FORCE_MODE=0x13` | forces an MGL mode index instead of letting the game pick |
-| `GTA_KEYS=0x0D,0x28` | posts these virtual-key codes to the game window in order, so an unattended run can drive the front end |
+| `GTA_KEYS=7:0x0D,11:0x28` | posts virtual-key codes to the game window in order; `STATE:VK` waits until the front-end state is STATE before sending |
+| `GTA_KEY_STATE=5101d0` | which global `STATE:` waits on (default is the front-end state) |
 | `GTA_KEY_MS=n` | milliseconds between scripted keys (default 2000) |
 | `GTA_KEY_DELAY_MS=n` | wait before the first scripted key (default 3000) |
 | `GTA_FILE_TRACE=1` | names every file the game opens, and flags the ones it fails to get |
@@ -194,6 +195,82 @@ code, on `MEM32(0x511104)`. The arm we take pushes the literal `6` to
 `sub_00427030`; the other arm sets `0x5110EC` -- exactly the global
 `sub_00428680` reads -- and pushes a computed state. Which is to say the port is
 taking a "resume" path where it should take a "start" one.
+
+### Driving the menu
+
+Keys can be written as `STATE:VK`, meaning "wait until the front-end state
+global is STATE, then send VK". Fixed delays cannot drive a menu -- a key lands
+in whichever state happens to be current when the timer fires, and one slow load
+shifts every key after it. Half the confusion below came from sequences that
+looked deterministic and were not.
+
+```
+GTA_KEYS=7:0x28,7:0x0D,11:0x0D,8:0x0D
+```
+
+### The input mask
+
+`sub_00426A50(mask)` takes an input bitmask and hands it to whichever state
+handler is current. The bits, measured by watching the argument while sending
+one key at a time rather than by reading the scan-code tables (which is what I
+tried first, and got wrong):
+
+| Key | Bit | Menu meaning |
+|---|---|---|
+| Up | `0x001` | cursor up |
+| Down | `0x002` | cursor down |
+| Left | `0x004` | value down |
+| Right | `0x008` | value up |
+| Enter | `0x010` | confirm |
+| Esc | `0x020` | back |
+| Backspace | `0x080` | |
+| Space | `0x200` | |
+
+### The menu map
+
+The cursor is `MEM32(0x5110A0)`. The main menu is state 7, handled by
+`sub_00428EE0`, and confirming dispatches on the cursor through a jump table at
+`0x429168`:
+
+| Item | Sets `0x511104` | Goes to |
+|---|---|---|
+| 1 | 0 | 11 -> 8 -> **6**, which loads `nyc.cmp` and `style001.g24` |
+| 2 | 1 | 11 -> 8 -> **18**, a player screen that reads `player_a.dat` |
+| 3 | 2 | 11 |
+| 4 | -- | 9 |
+
+State 18 uses Left/Right to change a value and Esc to go back; its confirm sets
+`0x5110EC` and `0x4AF414` and opens `mission.ini`.
+
+The cursor only moves while the menu that owns it is running. Sending Enter
+first leaves state 7, and every later Down then does nothing -- which is why
+the cursor looked stuck at 1 and every path led to item 1.
+
+### Why state 3 never runs
+
+State 3 is the one that promotes the audio mode and lets the play state stop
+spinning. It is entered from exactly one place in the binary -- inside **state
+16's** handler:
+
+```
+call sub_004870F0(...)          ; gate
+test eax, eax
+je   skip                        ; zero here means state 3 never happens
+push 3
+MEM32(0x5110EC) = edi
+MEM32(0x4AF414) = edi
+call sub_00427030                ; -> state 3
+```
+
+`sub_00428480`, which contains that, never executes: state 16 is never reached.
+And no literal `push 16` exists anywhere in the binary -- counting every
+transition through `sub_00427030` gives 7 (nine sites), 8 (five), 6 (three),
+0 (three), and one each of 9, 5, 3 and 2. So state 16 can only arrive through
+one of the computed transitions, `push edi`, of which the menu path has one at
+`0x00427A82`.
+
+That is the remaining question, and it is now a single one: what makes that
+computed state 16.
 
 ### AIL_ms_count returned zero forever
 
