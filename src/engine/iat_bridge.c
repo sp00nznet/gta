@@ -542,6 +542,35 @@ static HWND g_game_hwnd;
  */
 static u32 g_key_state_va = 0x5101D0u;
 
+/*
+ * GTA_FORCE_STATE=16 writes the front-end state directly, once, after
+ * GTA_FORCE_STATE_MS (default 20000). A diagnostic shortcut, not a fix: it
+ * answers "does the rest of the chain work if this state is entered" without
+ * first solving why the menu will not enter it.
+ */
+static DWORD WINAPI force_state_thread(LPVOID arg) {
+    char buf[16];
+    DWORD when = 20000;
+    u32 want = (u32)(uintptr_t)arg;
+    if (GetEnvironmentVariableA("GTA_FORCE_STATE_MS", buf, sizeof(buf)))
+        when = (DWORD)strtoul(buf, NULL, 0);
+    Sleep(when);
+    fprintf(stderr, "  STATE: forcing front-end state %u (was %u)\n",
+            want, MEM32(0x5101D0u));
+    MEM32(0x5101D0u) = want;
+    return 0;
+}
+
+static void start_force_state(void) {
+    char buf[16];
+    static int started = 0;
+    if (started || !GetEnvironmentVariableA("GTA_FORCE_STATE", buf, sizeof(buf))) return;
+    started = 1;
+    CreateThread(NULL, 0, force_state_thread,
+                 (LPVOID)(uintptr_t)strtoul(buf, NULL, 0), 0, NULL);
+}
+
+
 static void wait_for_state(u32 want) {
     int spins = 0;
     while (MEM32(g_key_state_va) != want && spins++ < 2000)
@@ -601,6 +630,7 @@ static void bridge_CreateWindowExA(void) {
     start_key_thread();
     start_mission_thread();
     start_watch_mem();
+    start_force_state();
     esp += 4+48;
 }
 /* Imported by this build but previously unbridged -- the old hand-written VA

@@ -44,6 +44,7 @@ carries its own instruments.
 | `GTA_KEY_DELAY_MS=n` | wait before the first scripted key (default 3000) |
 | `GTA_FILE_TRACE=1` | names every file the game opens, and flags the ones it fails to get |
 | `GTA_MISSION=n` | holds the mission-number global at n, bypassing the front end's choice |
+| `GTA_FORCE_STATE=n` | writes the front-end state directly after `GTA_FORCE_STATE_MS`; a probe, and one the game often does not survive |
 | `GTA_AUDIO_TRACE=1` | mixer voice count and peak level once a second, plus every sample start |
 | `GTA_AUDIO_MUTE=1` | mix as normal but output silence -- headless runs should not blast the machine |
 | `GTA_AUDIO_DUMP=mix.wav` | write the mixed output to a playable WAV, so it can be measured or listened to later |
@@ -271,6 +272,55 @@ one of the computed transitions, `push edi`, of which the menu path has one at
 
 That is the remaining question, and it is now a single one: what makes that
 computed state 16.
+
+### The route to state 3, in full
+
+State 3 is entered from exactly one instruction, and the whole chain to it is
+now known:
+
+```
+state 7  (main menu)   item 2 sets MEM32(0x511104) = 1
+   |
+state 11 (city select) Left/Right cycle MEM8(0x510698); confirm ->
+   |                   0x511104 != 2, so sub_00427030(8)
+state 8
+   |                   confirm
+state 18 (player)      confirm sets 0x5110EC, 0x4AF414, then needs
+   |                   sub_00486880() non-zero to call sub_00427030(0)
+state 0
+   |                   sub_00428150: `mov eax,[0x511104]; dec eax; je` --
+   |                   state 16 iff 0x511104 == 1, which is menu item 2
+state 16 (name entry)  sub_00428480, gated on sub_004870F0()
+   |
+state 3                promotes the audio mode, and the play state stops
+                       spinning
+```
+
+Two conditions on that path both key off `MEM32(0x511104) == 1`, which is
+consistent: menu item 2 is the "new player" route, and item 1 -- the one every
+earlier session took -- is the one that loads a city into a play state that was
+never initialised.
+
+**Where it stops.** State 18's confirm will not call `sub_00427030(0)` unless
+`sub_00486880()` returns non-zero, and it returns zero when the list at
+`0x7851C4` is empty. That list is empty for the whole run. Its only builder,
+`sub_00486910` (allocate a 0x18-byte node and prepend it), has no callers
+anywhere in the lifted code and never executes; the single dword in the image
+matching its address is a coincidental byte sequence inside `sub_00486880`
+itself, not a pointer.
+
+`sub_00486880` is worth reading carefully rather than treating as a predicate:
+it frees the head node, returns the head's `+0x14` field, and zeroes the list.
+It is a pop, not a query, so "the gate returns zero" and "the list was never
+built" are the same fact.
+
+So the open question is narrow: what is supposed to build the player list, and
+why does it not run. That is one function's worth of tracing, not a search.
+
+**What does not work as a shortcut.** `GTA_FORCE_STATE=16` writes the state
+global directly, and the game crashes: state 16's handler expects setup that the
+states before it perform. Worth knowing, and worth not repeating -- the state
+machine cannot be entered halfway.
 
 ### AIL_ms_count returned zero forever
 
