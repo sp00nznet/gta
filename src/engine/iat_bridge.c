@@ -927,10 +927,71 @@ static void bridge_SmackSoundUseMSS(void) { esp += 4+4; }
 /* ordinal 28 is SmackToBufferRect(2); ordinal 23 is the 7-arg SmackToBuffer. */
 static void bridge_SmackToBufferRect(void) { eax=1; esp += 4+8; }
 
-/* ===== DPLAYX bridges ===== */
-/* dplayx ordinals 1 and 2: DirectPlayCreate(3) / DirectPlayEnumerate(2). */
-static void bridge_dplay_create(void) { eax=0x80004005; esp += 4+12; }
-static void bridge_dplay_enumerate(void) { eax=0x80004005; esp += 4+8; }
+/* ===== DPLAYX bridges =====
+ *
+ * ordinal 1 = DirectPlayCreate(lpGUID, lplpDP, pUnk)
+ * ordinal 2 = DirectPlayEnumerateA(callback, context)
+ *
+ * Enumerating is not optional, even for a single-player game. GTA1's front end
+ * calls DirectPlayEnumerateA at state 0 and counts the service providers the
+ * callback reports; the count gates everything downstream. With the old stub
+ * returning E_FAIL and never calling back, the count stayed at zero, so state 0
+ * never routed to state 15 or 16, so states 5 and 3 -- the two that promote the
+ * audio mode -- were unreachable, and the play state span forever on a request
+ * that could not succeed.
+ *
+ * So one provider is reported. The name and GUID are ours; the game copies the
+ * GUID into its own list node and keeps the name pointer, so both have to live
+ * in game-visible memory.
+ */
+static u32 call_lifted(u32 va, const u32 *args, int n) {
+    recomp_func_t fn = recomp_lookup(va);
+    u32 saved_esp = esp, result;
+    int i;
+    if (!fn) {
+        fprintf(stderr, "  DPLAY: callback 0x%08X is not lifted\n", va);
+        return 0;
+    }
+    for (i = n - 1; i >= 0; i--) PUSH32(esp, args[i]);
+    PUSH32(esp, RECOMP_RETADDR);
+    fn();
+    result = eax;
+    esp = saved_esp;
+    return result;
+}
+
+static void bridge_dplay_create(void) { eax = 0x80004005u; esp += 4+12; }
+
+static void bridge_dplay_enumerate(void) {
+    u32 cb = ARG(1), ctx = ARG(2);
+    static u32 guid_va, name_va;
+    u32 args[5];
+
+    if (!guid_va) {
+        /* A GUID of our own. The game only stores and compares it. */
+        static const unsigned char guid[16] = {
+            0x36,0x3B,0x58,0x5A,0x3B,0xE1,0x11,0xD0,
+            0x9C,0x0B,0x00,0xA0,0xC9,0x06,0x28,0x02
+        };
+        int i;
+        guid_va = recomp_scratch_alloc(16);
+        for (i = 0; i < 16; i++) MEM8(guid_va + i) = guid[i];
+        name_va = recomp_scratch_str("Local Connection");
+    }
+
+    args[0] = guid_va;      /* lpguidSP        */
+    args[1] = name_va;      /* lpSPName        */
+    args[2] = 9;            /* dwMajorVersion  */
+    args[3] = 0;            /* dwMinorVersion  */
+    args[4] = ctx;          /* lpContext       */
+
+    if (cb) {
+        fprintf(stderr, "  DPLAY: enumerating 1 service provider\n");
+        call_lifted(cb, args, 5);
+    }
+    eax = 0;                /* DP_OK */
+    esp += 4+8;
+}
 
 #endif /* _WIN32 */
 
