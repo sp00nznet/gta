@@ -143,10 +143,13 @@ void recomp_trace_enter(uint32_t va) {
         }
     }
     if (is_watched(va)) {
-        fprintf(stderr, "  WATCH 0x%08X esp=0x%08X ecx=0x%08X args=[%08X %08X %08X %08X %08X %08X %08X]\n",
-                va, g_esp, g_ecx, MEM32(g_esp + 4), MEM32(g_esp + 8),
-                MEM32(g_esp + 12), MEM32(g_esp + 16), MEM32(g_esp + 20),
-                MEM32(g_esp + 24), MEM32(g_esp + 28));
+        /* ebx/esi/edi as well as the arguments: the callee-saved registers are
+         * the ones a mis-lifted callee silently destroys, and a value that
+         * changes across a call is the only way to see it. */
+        fprintf(stderr, "  WATCH 0x%08X esp=0x%08X ecx=0x%08X ebx=0x%08X esi=0x%08X edi=0x%08X args=[%08X %08X %08X %08X]\n",
+                va, g_esp, g_ecx, g_ebx, g_esi, g_edi,
+                MEM32(g_esp + 4), MEM32(g_esp + 8),
+                MEM32(g_esp + 12), MEM32(g_esp + 16));
     }
 }
 #endif

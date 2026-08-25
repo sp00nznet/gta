@@ -367,6 +367,50 @@ It is invoked once per frame while state 3 is current, and esp walks down
 steadily -- the same shape of fault as the `AIL_ms_count` arity bug, and it will
 eventually run off the stack.
 
+### Why state 3 does nothing: edi is clobbered
+
+State 3's handler `sub_00428680` opens with `mov eax, [0x4AF414]; test eax,eax;
+je` and skips everything when that global is zero. Watching it, `0x4AF414` and
+`0x5110EC` both drop to 0 at the instant state 3 is entered -- which is the pair
+of writes at the end of state 16's handler:
+
+```
+0x00428538  mov edi, 1          <-- edi set here
+0x00428540  call sub_00404860       (5 calls in between)
+0x00428550  call sub_0042D830
+0x00428555  call sub_0042DA50
+0x0042855F  call sub_00486CC0
+0x0042857F  call sub_004870F0
+0x0042858D  mov [0x5110EC], edi <-- used here
+0x00428593  mov [0x4AF414], edi
+```
+
+`edi` is only ever assigned `0x510699` or `1` in that function, and the value
+that lands is **0**. So it is being clobbered across one of those five calls,
+and the gate it feeds is what stops state 3 from starting the game.
+`sub_00412B20` never runs, `0x501D70` never changes from 0, and `0x501D7C`
+stays at 1.
+
+`GTA_WATCH` now prints `ebx`, `esi` and `edi` alongside the arguments. The
+callee-saved registers are exactly what a mis-lifted callee destroys silently,
+and a value that changes across a call is the only way to see it happen.
+
+### An 8-byte stack leak in the same chain
+
+`sub_0042DA50` -- one of the five, called at `0x00428555` -- leaks **8 bytes of
+simulated stack per call**, measured directly: consecutive `WATCH` lines show
+esp at its entry walking down 0x02A30FF0, FE8, FE0, FD8, once per frame.
+
+Its body ends in a batched `add esp, 0x30`, the MSVC habit of cleaning up
+several cdecl calls at once. Counting what it pushes against that cleanup gives
+13 pushes -- 52 bytes -- against 48 freed. Every callee's return opcode in the
+chain was checked in the image and all are plain `c3`, so this is not a `ret
+imm16` lifted as a bare `ret`.
+
+That leaves the argument accounting itself, and the two faults are very likely
+one: a call chain that unbalances the stack is also a call chain that restores
+the wrong `edi`. Not yet pinned to a single instruction.
+
 ### AIL_ms_count returned zero forever
 
 Getting that far needed one real fix. `AIL_ms_count` was implemented as
