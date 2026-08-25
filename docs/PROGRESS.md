@@ -103,8 +103,15 @@ skipped, so `sub_00412A90` returns -1 forever and the play state waits on it.
 The port takes a "resume" arm of the menu branch where it should take "start".
 See docs/BRINGUP.md.
 
-**The quit path faults.** `VK_ESCAPE` makes the game call `ExitProcess`, and the
-process then faults executing a bridge cookie. See docs/BRINGUP.md.
+**The quit path faults, and not where I thought.** `VK_ESCAPE` faults at
+`0xB0000053`, a bridge cookie executed as code. The earlier write-up blamed CRT
+teardown after `ExitProcess`; that is wrong -- `ExitProcess` is never reached,
+its bridge never logs. Both `RECOMP_ICALL` and `RECOMP_ITAIL` resolve import
+cookies correctly, so the transfer is coming from somewhere else. Unresolved.
+
+`bridge_ExitProcess` now calls the real `ExitProcess` rather than the CRT's
+`exit()`, which is what the game asked for and avoids running host atexit
+handlers with a lifted window proc on the stack. It does not fix this crash.
 
 **Rendering path.** Frames reach the screen through `StretchDIBits`, not the
 OpenGL renderer the project is aiming at. Correct, and not fast.

@@ -274,7 +274,13 @@ static void bridge_Sleep(void) { Sleep(ARG(1)); esp += 4+4; }
 static void bridge_ExitProcess(void) {
     fprintf(stderr, "ExitProcess(0x%X)\n", ARG(1));
     recomp_dump_trace("ExitProcess");
-    exit(ARG(1));
+    /* The real API, not the CRT's exit(). exit() runs host atexit handlers and
+     * static teardown while a lifted window proc is still on the host stack
+     * with esp pointing at the simulated stack, and the unwind then faults
+     * executing a bridge cookie. ExitProcess is also simply what the game
+     * asked for. */
+    fflush(NULL);
+    ExitProcess(ARG(1));
 }
 static void bridge_GetModuleHandleA(void) { eax = (u32)(uintptr_t)GetModuleHandleA(ARG(1) ? VA2STR(ARG(1)) : NULL); esp += 4+4; }
 static void bridge_GetCommandLineA(void) {
