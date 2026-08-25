@@ -322,6 +322,51 @@ global directly, and the game crashes: state 16's handler expects setup that the
 states before it perform. Worth knowing, and worth not repeating -- the state
 machine cannot be entered halfway.
 
+### GTA1 runs single player over DirectPlay
+
+The reason neither route to a running game worked is that both go through
+DirectPlay, and DPLAYX was stubbed to `E_FAIL`.
+
+`sub_00496CE4` is not a game function at all -- it is `jmp [0x4A7018]`, the
+import thunk for **DPLAYX ordinal 2, DirectPlayEnumerateA**. The front end calls
+it at state 0, counts the service providers the callback reports into
+`MEM32(0x785184)`, and gates everything downstream on that count. With the stub
+never invoking the callback the count stayed zero, so state 18's confirm did
+nothing at all -- no error, no transition, which is why it read as "the menu is
+broken" for so long.
+
+Two bridges fix it:
+
+- **DirectPlayEnumerateA** reports one service provider, with the GUID and name
+  in game-visible memory: the game copies the GUID into its own list node and
+  keeps the name pointer.
+- **DirectPlayCreate** returns a minimal **IDirectPlay2** built the same way as
+  the DirectDraw shim -- an object in game memory whose vtable holds a bridge
+  cookie per slot, with an arity table so a slot that is called unwinds the
+  simulated stack correctly.
+
+The game touches four slots (`Release`, `Close`, `DestroyPlayer`, `Open`), but
+every slot needs a cookie: an unimplemented one that gets called would execute
+the cookie address as code. `QueryInterface` has to write the object into its
+output pointer -- returning success without doing so crashed the game, because
+it then used whatever was already there.
+
+With both in place the front end walks the whole route:
+
+```
+7 -> 11 -> 8 -> 18 -> 0 -> 16 -> Open -> CreatePlayer -> EnumPlayers -> 3
+```
+
+**State 3 is reached.** What it does not yet do is promote the audio mode:
+`sub_00428680` is gated on `MEM32(0x4AF414)`, and that global is 0 by the time
+state 3 runs, so the handler takes its skip path and `sub_00412B20` never runs.
+`0x501D7C` stays 1, and `sub_00412A90` still returns -1.
+
+Also worth chasing: `sub_00428680` leaks 8 bytes of simulated stack per call.
+It is invoked once per frame while state 3 is current, and esp walks down
+steadily -- the same shape of fault as the `AIL_ms_count` arity bug, and it will
+eventually run off the stack.
+
 ### AIL_ms_count returned zero forever
 
 Getting that far needed one real fix. `AIL_ms_count` was implemented as

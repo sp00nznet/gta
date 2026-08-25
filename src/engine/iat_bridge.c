@@ -960,7 +960,89 @@ static u32 call_lifted(u32 va, const u32 *args, int n) {
     return result;
 }
 
-static void bridge_dplay_create(void) { eax = 0x80004005u; esp += 4+12; }
+/*
+ * A minimal IDirectPlay2, built the same way as the DirectDraw shim: an object
+ * in game memory whose vtable holds a bridge cookie per slot.
+ *
+ * GTA1 runs single player over a local DirectPlay session, so the front end
+ * cannot reach either of the states that start a game without one. It only
+ * touches four slots on this object -- Release (+0x08), Close (+0x10),
+ * DestroyPlayer (+0x24) and Open (+0x60) -- but every slot needs a cookie,
+ * because an unimplemented one that is called would execute the cookie address
+ * as code. The arity table exists for the same reason: a slot that returns
+ * without popping its arguments leaves the simulated stack skewed.
+ */
+#define DP_SLOTS 32
+#define DP_OK    0
+
+static const unsigned char k_dp_argc[DP_SLOTS] = {
+    /* QueryInterface AddRef Release AddPlayerToGroup */
+    3, 1, 1, 3,
+    /* Close CreateGroup CreatePlayer DeletePlayerFromGroup */
+    1, 5, 6, 3,
+    /* DestroyGroup DestroyPlayer EnumGroupPlayers EnumGroups */
+    2, 2, 5, 5,
+    /* EnumPlayers EnumSessions GetCaps GetGroupData */
+    4, 5, 3, 5,
+    /* GetGroupName GetMessageCount GetPlayerAddress GetPlayerCaps */
+    4, 3, 4, 3,
+    /* GetPlayerData GetPlayerName GetSessionDesc Initialize */
+    5, 4, 3, 2,
+    /* Open Receive Send SetGroupData */
+    3, 5, 5, 4,
+    /* SetGroupName SetPlayerData SetPlayerName SetSessionDesc */
+    4, 5, 4, 3
+};
+
+static u32 g_dp_vtable;
+static u32 g_dp_object;
+static struct { unsigned char slot; } g_dp_method[512];
+
+static void dp_dispatch(void) {
+    int slot = g_dp_method[g_bridge_hit].slot;
+    int argc = slot < DP_SLOTS ? k_dp_argc[slot] : 1;
+
+    /* +0x60 is Open: the game checks the result and proceeds to build its
+     * session. Everything else it calls is teardown or a no-op for a session
+     * that never leaves this machine. */
+    if (g_file_trace > 0)
+        fprintf(stderr, "  DPLAY: IDirectPlay slot %d (+0x%02X), %d args\n",
+                slot, slot * 4, argc);
+    switch (slot) {
+    case 0:   /* QueryInterface(riid, ppv) -- hand back the same object, or the
+               * caller proceeds with whatever was in the output pointer. */
+        if (ARG(3)) MEM32(ARG(3)) = g_dp_object;
+        eax = DP_OK;
+        break;
+    case 1:   eax = 1; break;      /* AddRef  */
+    case 2:   eax = 0; break;      /* Release */
+    default:  eax = DP_OK; break;
+    }
+    esp += 4 + 4 * argc;
+}
+
+static void dp_make_object(void) {
+    int i;
+    if (g_dp_object) return;
+    g_dp_vtable = recomp_scratch_alloc(DP_SLOTS * 4);
+    for (i = 0; i < DP_SLOTS; i++) {
+        u32 cookie = recomp_alloc_bridge("IDirectPlay", dp_dispatch);
+        g_dp_method[cookie - BRIDGE_BASE].slot = (unsigned char)i;
+        MEM32(g_dp_vtable + i * 4) = cookie;
+    }
+    g_dp_object = recomp_scratch_alloc(8);
+    MEM32(g_dp_object) = g_dp_vtable;
+    fprintf(stderr, "  DPLAY: IDirectPlay object 0x%08X (%d slots)\n",
+            g_dp_object, DP_SLOTS);
+}
+
+static void bridge_dplay_create(void) {
+    /* DirectPlayCreate(lpGUID, lplpDP, pUnkOuter) */
+    dp_make_object();
+    if (ARG(2)) MEM32(ARG(2)) = g_dp_object;
+    eax = DP_OK;
+    esp += 4+12;
+}
 
 static void bridge_dplay_enumerate(void) {
     u32 cb = ARG(1), ctx = ARG(2);
