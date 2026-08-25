@@ -367,49 +367,48 @@ It is invoked once per frame while state 3 is current, and esp walks down
 steadily -- the same shape of fault as the `AIL_ms_count` arity bug, and it will
 eventually run off the stack.
 
-### Why state 3 does nothing: edi is clobbered
+### State 3 works: three wrong arities in my own shim
 
-State 3's handler `sub_00428680` opens with `mov eax, [0x4AF414]; test eax,eax;
-je` and skips everything when that global is zero. Watching it, `0x4AF414` and
-`0x5110EC` both drop to 0 at the instant state 3 is entered -- which is the pair
-of writes at the end of state 16's handler:
+State 3's handler is gated on `MEM32(0x4AF414)`, and that global was being
+zeroed by the pair of writes at the end of state 16's handler:
 
 ```
-0x00428538  mov edi, 1          <-- edi set here
-0x00428540  call sub_00404860       (5 calls in between)
-0x00428550  call sub_0042D830
-0x00428555  call sub_0042DA50
-0x0042855F  call sub_00486CC0
-0x0042857F  call sub_004870F0
-0x0042858D  mov [0x5110EC], edi <-- used here
+0x00428538  mov edi, 1          <-- set here
+            ... five calls ...
+0x0042858D  mov [0x5110EC], edi <-- used here, and edi was 0
 0x00428593  mov [0x4AF414], edi
 ```
 
-`edi` is only ever assigned `0x510699` or `1` in that function, and the value
-that lands is **0**. So it is being clobbered across one of those five calls,
-and the gate it feeds is what stops state 3 from starting the game.
-`sub_00412B20` never runs, `0x501D70` never changes from 0, and `0x501D7C`
-stays at 1.
+Watching `edi` at each callee's entry -- `GTA_WATCH` prints `ebx`, `esi` and
+`edi` for exactly this -- narrowed it in two runs: `sub_00486CC0` and
+`sub_004870F0` both saw `edi = 1`, and `sub_00427030` immediately after saw 0.
+So `sub_004870F0` was returning without it.
 
-`GTA_WATCH` now prints `ebx`, `esi` and `edi` alongside the arguments. The
-callee-saved registers are exactly what a mis-lifted callee destroys silently,
-and a value that changes across a call is the only way to see it happen.
+It was not a lifting bug. `sub_004870F0` calls `IDirectPlay::CreatePlayer`
+through the vtable, and **the arity table in this project's own DirectPlay shim
+was wrong**: the call pushes seven stack slots including `this`, and the table
+said six. `EnumPlayers` and `Receive` were short by one too. I had built that
+table counting `this` in some entries and not others.
 
-### An 8-byte stack leak in the same chain
+A wrong arity does not fail loudly. The call returns, the simulated stack is 4
+bytes short for the rest of the run, and the next `pop` restores a register from
+the wrong slot -- which is how three off-by-one table entries turned into "edi
+is mysteriously zero" and an 8-byte-per-frame stack leak. Both faults were one
+cause, and the cause was mine, added earlier in the same session.
 
-`sub_0042DA50` -- one of the five, called at `0x00428555` -- leaks **8 bytes of
-simulated stack per call**, measured directly: consecutive `WATCH` lines show
-esp at its entry walking down 0x02A30FF0, FE8, FE0, FD8, once per frame.
+With the table corrected the whole chain completes:
 
-Its body ends in a batched `add esp, 0x30`, the MSVC habit of cleaning up
-several cdecl calls at once. Counting what it pushes against that cleanup gives
-13 pushes -- 52 bytes -- against 48 freed. Every callee's return opcode in the
-chain was checked in the image and all are plain `c3`, so this is not a `ret
-imm16` lifted as a bare `ret`.
+- `MEM32(0x501D7C)` goes 1 -> **2**, the audio mode promoted
+- `MEM32(0x501D70)` is set, so `sub_00412B20` really ran
+- `0x4AF414` clears afterwards, which is the one-shot behaviour it should have
+- `sub_00412A90` stops returning -1, and **the spin is gone**: the bridge mix in
+  the last few thousand log lines is `GetSystemTimeAsFileTime`,
+  `IDirectDrawSurface`, `IDirectPlay` and `PeekMessageA`, where it used to be
+  `AIL_ms_count` 4000 times over
 
-That leaves the argument accounting itself, and the two faults are very likely
-one: a call chain that unbalances the stack is also a call chain that restores
-the wrong `edi`. Not yet pinned to a single instruction.
+The game now sits in state 3 rendering steadily rather than spinning. It does
+not load a city on this route -- that is menu item 1 -- so the next question is
+whether the two can be combined.
 
 ### AIL_ms_count returned zero forever
 

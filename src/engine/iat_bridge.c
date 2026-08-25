@@ -960,38 +960,47 @@ static u32 call_lifted(u32 va, const u32 *args, int n) {
     return result;
 }
 
-/*
- * A minimal IDirectPlay2, built the same way as the DirectDraw shim: an object
- * in game memory whose vtable holds a bridge cookie per slot.
- *
- * GTA1 runs single player over a local DirectPlay session, so the front end
- * cannot reach either of the states that start a game without one. It only
- * touches four slots on this object -- Release (+0x08), Close (+0x10),
- * DestroyPlayer (+0x24) and Open (+0x60) -- but every slot needs a cookie,
- * because an unimplemented one that is called would execute the cookie address
- * as code. The arity table exists for the same reason: a slot that returns
- * without popping its arguments leaves the simulated stack skewed.
- */
 #define DP_SLOTS 32
 #define DP_OK    0
 
+/* Stack slots per method, INCLUDING the `this` pointer -- the count the
+ * dispatcher has to pop. Getting one of these wrong does not fail loudly: the
+ * call returns, and the simulated stack is 4 bytes short for the rest of the
+ * run. Three of these were short by one, which cost 8 bytes a frame and left
+ * callee-saved registers restored from the wrong slots. */
 static const unsigned char k_dp_argc[DP_SLOTS] = {
-    /* QueryInterface AddRef Release AddPlayerToGroup */
-    3, 1, 1, 3,
-    /* Close CreateGroup CreatePlayer DeletePlayerFromGroup */
-    1, 5, 6, 3,
-    /* DestroyGroup DestroyPlayer EnumGroupPlayers EnumGroups */
-    2, 2, 5, 5,
-    /* EnumPlayers EnumSessions GetCaps GetGroupData */
-    4, 5, 3, 5,
-    /* GetGroupName GetMessageCount GetPlayerAddress GetPlayerCaps */
-    4, 3, 4, 3,
-    /* GetPlayerData GetPlayerName GetSessionDesc Initialize */
-    5, 4, 3, 2,
-    /* Open Receive Send SetGroupData */
-    3, 5, 5, 4,
-    /* SetGroupName SetPlayerData SetPlayerName SetSessionDesc */
-    4, 5, 4, 3
+    3,  /* 0x00 QueryInterface(riid, ppv)                        */
+    1,  /* 0x04 AddRef()                                         */
+    1,  /* 0x08 Release()                                        */
+    3,  /* 0x0C AddPlayerToGroup(gid, pid)                       */
+    1,  /* 0x10 Close()                                          */
+    6,  /* 0x14 CreateGroup(lpid, name, data, size, flags)       */
+    7,  /* 0x18 CreatePlayer(lpid, name, hEvent, data, size, fl) */
+    3,  /* 0x1C DeletePlayerFromGroup(gid, pid)                  */
+    2,  /* 0x20 DestroyGroup(gid)                                */
+    2,  /* 0x24 DestroyPlayer(pid)                               */
+    6,  /* 0x28 EnumGroupPlayers(gid, guid, cb, ctx, flags)      */
+    5,  /* 0x2C EnumGroups(guid, cb, ctx, flags)                 */
+    5,  /* 0x30 EnumPlayers(guid, cb, ctx, flags)                */
+    6,  /* 0x34 EnumSessions(lpsd, timeout, cb, ctx, flags)      */
+    3,  /* 0x38 GetCaps(caps, flags)                             */
+    5,  /* 0x3C GetGroupData(gid, data, size, flags)             */
+    4,  /* 0x40 GetGroupName(gid, data, size)                    */
+    3,  /* 0x44 GetMessageCount(pid, count)                      */
+    4,  /* 0x48 GetPlayerAddress(pid, data, size)                */
+    4,  /* 0x4C GetPlayerCaps(pid, caps, flags)                  */
+    5,  /* 0x50 GetPlayerData(pid, data, size, flags)            */
+    4,  /* 0x54 GetPlayerName(pid, data, size)                   */
+    3,  /* 0x58 GetSessionDesc(data, size)                       */
+    2,  /* 0x5C Initialize(guid)                                 */
+    3,  /* 0x60 Open(lpsd, flags)                                */
+    6,  /* 0x64 Receive(from, to, flags, data, size)             */
+    6,  /* 0x68 Send(from, to, flags, data, size)                */
+    5,  /* 0x6C SetGroupData(gid, data, size, flags)             */
+    4,  /* 0x70 SetGroupName(gid, name, flags)                   */
+    5,  /* 0x74 SetPlayerData(pid, data, size, flags)            */
+    4,  /* 0x78 SetPlayerName(pid, name, flags)                  */
+    3   /* 0x7C SetSessionDesc(lpsd, flags)                      */
 };
 
 static u32 g_dp_vtable;
