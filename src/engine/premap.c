@@ -27,8 +27,44 @@
 #pragma comment(lib, "psapi.lib")
 
 #define PREMAP_BASE  0x00400000
-#define PREMAP_SIZE  0x00400000  /* 0x400000..0x800000: .text/.rdata/.data/.rsrc */
+#define PREMAP_MIN   0x00400000  /* floor; the real size comes from the image */
 #define PREMAP_ENV   "GTA_RECOMP_CHILD"
+
+/*
+ * How much to reserve at 0x400000.
+ *
+ * This was a flat 4 MB, which fits GTA1's 3.57 MB image and not London's
+ * 4.42 MB -- London reserved successfully, then failed to map, and the error
+ * pointed at the host's link base, which was fine. Read the size the image
+ * actually needs out of its section headers instead of guessing.
+ */
+static DWORD image_span(const char *path) {
+    unsigned char hdr[0x400];
+    DWORD got = 0, pe, nsec, opt, i, top = 0;
+    HANDLE h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                           OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    ReadFile(h, hdr, sizeof(hdr), &got, NULL);
+    CloseHandle(h);
+    if (got < 0x200 || hdr[0] != 'M' || hdr[1] != 'Z') return 0;
+
+    pe = *(DWORD *)(hdr + 0x3C);
+    if (pe + 0x18 > got) return 0;
+    nsec = *(WORD *)(hdr + pe + 0x06);
+    opt  = *(WORD *)(hdr + pe + 0x14);          /* SizeOfOptionalHeader */
+    for (i = 0; i < nsec; i++) {
+        unsigned char *s = hdr + pe + 0x18 + opt + i * 40;
+        DWORD vsize, rsize, va, end;
+        if ((size_t)(s - hdr) + 40 > got) break;
+        vsize = *(DWORD *)(s + 0x08);
+        va    = *(DWORD *)(s + 0x0C);
+        rsize = *(DWORD *)(s + 0x10);
+        end   = va + (vsize > rsize ? vsize : rsize);
+        if (end > top) top = end;
+    }
+    if (!top) return 0;
+    return (top + 0xFFFFF) & ~0xFFFFFu;         /* round up to 1 MB */
+}
 
 static const char *type_name(DWORD t) {
     switch (t) {
@@ -64,11 +100,13 @@ int premap_is_child(void) {
 
 /* Parent half: spawn ourselves suspended, reserve the image range, resume.
  * Returns the child's exit code, or -1 if the child could not be started. */
-int premap_relaunch(void) {
+int premap_relaunch(const char *game_exe) {
     char cmdline[MAX_PATH * 2];
     STARTUPINFOA si = { sizeof(si) };
     PROCESS_INFORMATION pi;
     DWORD code = (DWORD)-1;
+
+    DWORD span = image_span(game_exe);
 
     lstrcpynA(cmdline, GetCommandLineA(), sizeof(cmdline));
     SetEnvironmentVariableA(PREMAP_ENV, "1");
@@ -79,7 +117,11 @@ int premap_relaunch(void) {
         return -1;
     }
 
-    if (!VirtualAllocEx(pi.hProcess, (void *)(uintptr_t)PREMAP_BASE, PREMAP_SIZE,
+    if (!span) span = PREMAP_MIN;
+    if (span < PREMAP_MIN) span = PREMAP_MIN;
+    fprintf(stderr, "  premap: reserving 0x%08X bytes at 0x%08X\n", span, PREMAP_BASE);
+
+    if (!VirtualAllocEx(pi.hProcess, (void *)(uintptr_t)PREMAP_BASE, span,
                         MEM_RESERVE, PAGE_NOACCESS)) {
         fprintf(stderr, "FATAL: could not reserve 0x%08X in the child (%lu)\n",
                 PREMAP_BASE, GetLastError());
@@ -104,6 +146,6 @@ void premap_report(void) {
 }
 #else
 int  premap_is_child(void) { return 1; }
-int  premap_relaunch(void) { return -1; }
+int  premap_relaunch(const char *game_exe) { (void)game_exe; return -1; }
 void premap_report(void)   {}
 #endif

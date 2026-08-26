@@ -520,3 +520,29 @@ it left the RIFF size, the data size and the byte-rate field all zero, which no
 player will open, and which the analysis above did not catch: that reads the PCM
 directly from offset 44 and never parses the header, so it was measuring the
 right samples through a container no player would accept.
+
+## London 1969
+
+The second target, and the reason to have one: it exercised paths GTA1 never
+touched and found four bugs in an afternoon.
+
+The lift is **3,813 functions, 0 errors** -- against 2,137 from an earlier
+session on the same binary, so the discovery improvements are worth 78% more
+code found. It takes about 92 minutes; London's `.text` is 989 KB to GTA1's 677.
+
+| Found by trying a second binary | |
+|---|---|
+| A label with no statement | A function whose only instruction is `int3` lifts to a label, a comment, and the closing brace, which is not valid C. London has int3 padding the data scan picks up as function starts: **262 syntax errors**. GTA1 had none. |
+| A hardcoded entry point | `main.c` declared `extern void sub_0049DC30(void)` -- GTA1's CRT startup and nothing else's. The entry now comes from the mapped image's own PE header, which works for any target. |
+| A fixed reservation size | `premap` reserved a flat 4 MB at 0x400000. GTA1's image spans 3.57 MB and London's 4.42, so London reserved successfully and then failed to map -- reporting that the *host* was linked at a bad base, which it was not. The reservation is now sized from the image's section headers. |
+| 22 unbridged imports | Interlocked ops, `timeGetTime`, `InvalidateRect`, `OutputDebugStringA` and the MSS **redbook** family -- CD audio, which London uses for its soundtrack and GTA1 does not. An unbridged import is not inert: the IAT slot keeps whatever the image had, and London faulted after 33 icalls with those outstanding. |
+
+With those fixed London binds **262 bridges, 0 unbridged**, resolves its entry at
+`0x004D4F20`, routes its window proc, creates DirectDraw surfaces, starts the
+mixer, and reads its own data out of `..\gtadata\uk\`. Frames capture empty,
+which is exactly where GTA1 stood several sessions ago.
+
+Nothing here was specific to London. Every one of these was a latent assumption
+that only one binary had ever been run through -- a hardcoded symbol, a constant
+that happened to fit, a lifter case that happened not to occur, an import set
+that happened to be complete.

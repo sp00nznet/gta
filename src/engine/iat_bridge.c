@@ -933,6 +933,41 @@ static void bridge_SmackSoundUseMSS(void) { esp += 4+4; }
 /* ordinal 28 is SmackToBufferRect(2); ordinal 23 is the 7-arg SmackToBuffer. */
 static void bridge_SmackToBufferRect(void) { eax=1; esp += 4+8; }
 
+/* ===== imports London needs that GTA1 never calls =====
+ *
+ * An unbridged import is not inert: the IAT slot keeps whatever the image had
+ * in it, and calling through it jumps into nothing. London reached 33 icalls
+ * before faulting with 22 of these outstanding.
+ *
+ * The MSS redbook family is CD audio, which London uses for its soundtrack and
+ * GTA1 does not. Stubbed rather than implemented: the tracks are not present in
+ * a hard-disk install, and reporting zero tracks is the honest answer.
+ */
+static void bridge_InterlockedIncrement(void) { eax = (u32)InterlockedIncrement((LONG*)VA2PTR(ARG(1))); esp += 4+4; }
+static void bridge_InterlockedDecrement(void) { eax = (u32)InterlockedDecrement((LONG*)VA2PTR(ARG(1))); esp += 4+4; }
+static void bridge_SetConsoleCtrlHandler(void) { eax = 1; esp += 4+8; }
+static void bridge_OutputDebugStringA(void) { if (ARG(1)) fprintf(stderr, "  DBG: %s", VA2STR(ARG(1))); esp += 4+4; }
+static void bridge_FreeLibrary(void) { eax = 1; esp += 4+4; }
+static void bridge_DebugBreak(void) { fprintf(stderr, "  DebugBreak ignored\n"); esp += 4; }
+static void bridge_HeapValidate(void) { eax = 1; esp += 4+12; }
+static void bridge_MessageBeep(void) { eax = 1; esp += 4+4; }
+static void bridge_InvalidateRect(void) { eax = InvalidateRect((HWND)(uintptr_t)ARG(1), ARG(2)?(const RECT*)VA2PTR(ARG(2)):NULL, (BOOL)ARG(3)); esp += 4+12; }
+static void bridge_timeGetTime(void) { eax = (u32)timeGetTime(); esp += 4; }
+static void bridge_UnrealizeObject(void) { eax = UnrealizeObject((HGDIOBJ)(uintptr_t)ARG(1)); esp += 4+4; }
+static void bridge_AIL_sample_volume(void) { eax = (u32)AIL_sample_volume((HSAMPLE)(uintptr_t)ARG(1)); esp += 4+4; }
+
+/* Redbook: no CD, no tracks. */
+static void bridge_AIL_redbook_open(void)       { eax = 0; esp += 4+4;  }
+static void bridge_AIL_redbook_close(void)      { esp += 4+4;  }
+static void bridge_AIL_redbook_status(void)     { eax = 1; esp += 4+4;  }   /* REDBOOK_STOPPED */
+static void bridge_AIL_redbook_tracks(void)     { eax = 0; esp += 4+4;  }
+static void bridge_AIL_redbook_play(void)       { eax = 0; esp += 4+12; }
+static void bridge_AIL_redbook_stop(void)       { esp += 4+4;  }
+static void bridge_AIL_redbook_volume(void)     { eax = 0; esp += 4+4;  }
+static void bridge_AIL_redbook_set_volume(void) { esp += 4+8;  }
+static void bridge_AIL_redbook_track_info(void) { eax = 0; esp += 4+16; }
+static void bridge_AIL_redbook_position(void)   { eax = 0; esp += 4+4;  }
+
 /* ===== DPLAYX bridges =====
  *
  * ordinal 1 = DirectPlayCreate(lpGUID, lplpDP, pUnk)
@@ -1232,6 +1267,30 @@ void setup_iat_bridges(void) {
     register_bridge("joyGetDevCapsA", bridge_joyGetDevCapsA);
 
     /* DPLAYX.dll (2 functions) */
+
+    /* Imports London calls and GTA1 does not */
+    register_bridge("InterlockedIncrement", bridge_InterlockedIncrement);
+    register_bridge("InterlockedDecrement", bridge_InterlockedDecrement);
+    register_bridge("SetConsoleCtrlHandler", bridge_SetConsoleCtrlHandler);
+    register_bridge("OutputDebugStringA", bridge_OutputDebugStringA);
+    register_bridge("FreeLibrary", bridge_FreeLibrary);
+    register_bridge("DebugBreak", bridge_DebugBreak);
+    register_bridge("HeapValidate", bridge_HeapValidate);
+    register_bridge("MessageBeep", bridge_MessageBeep);
+    register_bridge("InvalidateRect", bridge_InvalidateRect);
+    register_bridge("timeGetTime", bridge_timeGetTime);
+    register_bridge("UnrealizeObject", bridge_UnrealizeObject);
+    register_bridge("AIL_sample_volume", bridge_AIL_sample_volume);
+    register_bridge("AIL_redbook_open", bridge_AIL_redbook_open);
+    register_bridge("AIL_redbook_close", bridge_AIL_redbook_close);
+    register_bridge("AIL_redbook_status", bridge_AIL_redbook_status);
+    register_bridge("AIL_redbook_tracks", bridge_AIL_redbook_tracks);
+    register_bridge("AIL_redbook_play", bridge_AIL_redbook_play);
+    register_bridge("AIL_redbook_stop", bridge_AIL_redbook_stop);
+    register_bridge("AIL_redbook_volume", bridge_AIL_redbook_volume);
+    register_bridge("AIL_redbook_set_volume", bridge_AIL_redbook_set_volume);
+    register_bridge("AIL_redbook_track_info", bridge_AIL_redbook_track_info);
+    register_bridge("AIL_redbook_position", bridge_AIL_redbook_position);
     register_bridge("ordinal_1", bridge_dplay_create);
     register_bridge("ordinal_2", bridge_dplay_enumerate);
 

@@ -38,13 +38,14 @@ only through pointers in `.data`.
 ## Phase 3: Code lifting
 
 - [x] GTA1: **2,590 functions, 952,581 lines of C, 0 errors**
-- [x] London 1969: 2,137 functions, 205,665 lines of C, 0 errors
+- [x] London 1969: 3,813 functions, 0 errors (2,137 before the discovery fixes)
 - [x] Global register model (`eax`-`esp`, plus global `ebp`)
 - [x] Memory access via VA translation (`ADDR()` / `MEM32()`)
 - [x] Dispatch table for indirect calls
 - [x] Import bridge stubs for all 166 imports
 - [x] Correct function entry blocks
 - [x] Flags evaluated correctly across basic blocks
+- [x] London 1969 re-lifted on the current toolkit: **3,813 functions**, 0 errors
 - [ ] London 1961 lifting
 - [ ] GTA2 lifting (blocked)
 
