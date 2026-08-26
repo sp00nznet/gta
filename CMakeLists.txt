@@ -18,14 +18,11 @@ file(GLOB GTA1_RECOMP_SOURCES "src/recomp/gen/recomp_*.c")
 
 if(NOT GTA1_RECOMP_SOURCES)
     message(FATAL_ERROR
-        "No lifted sources in src/recomp/gen/.
-"
+        "No lifted sources in src/recomp/gen/.\n"
         "The lifted C is generated from your own copy of the game, not shipped "
-        "with this repository. Generate it first:
-"
+        "with this repository. Generate it first:\n"
         "  python tools/run_pipeline.py \"<path to>/Grand Theft Auto.exe\" "
-        "--all --split 500 --functions-json config/functions_gta1.json
-"
+        "--all --split 500 --functions-json config/functions_gta1.json\n"
         "  python tools/soften_fatal.py")
 endif()
 
@@ -105,3 +102,51 @@ set_target_properties(gta1 PROPERTIES
 
 # --- GTA2 target (placeholder) ---
 # add_executable(gta2 ...)
+
+# --- GTA London 1969 ---
+#
+# The same Race'n'Chase engine and the same shims; only the lifted code is
+# different. Built when that lift is present, skipped quietly when it is not,
+# because most people will only ever generate GTA1.
+file(GLOB LONDON_RECOMP_SOURCES "src/recomp/gen_london69/*.c")
+if(LONDON_RECOMP_SOURCES)
+    add_executable(london
+        src/engine/main.c
+        src/engine/recomp_runtime.c
+        src/engine/image_loader.c
+        src/engine/hybrid.c
+        src/engine/iat_bridge.c
+        src/engine/premap.c
+        src/sound/miles_shim.c
+        src/sound/mixer.c
+        src/video/smacker_shim.c
+        src/video/ddraw_shim.c
+        ${LONDON_RECOMP_SOURCES}
+    )
+    target_include_directories(london PRIVATE
+        src/ src/common/ src/engine/ src/recomp/gen_london69/)
+    if(GTA_TRACE)
+        target_compile_definitions(london PRIVATE RECOMP_TRACE=1)
+    endif()
+    if(SDL2_FOUND)
+        target_link_libraries(london PRIVATE SDL2::SDL2)
+        target_compile_definitions(london PRIVATE HAS_SDL2=1)
+    else()
+        target_compile_definitions(london PRIVATE HAS_SDL2=0)
+    endif()
+    if(WIN32)
+        target_link_libraries(london PRIVATE ws2_32 winmm)
+    endif()
+    if(MSVC)
+        # Identical to gta1: the image has to land at its original base, so the
+        # same constraints apply -- no ASLR, our exe moved out of the way, and a
+        # small host stack and heap so neither claims 0x400000.
+        target_link_options(london PRIVATE
+            /DYNAMICBASE:NO /STACK:1048576 /LARGEADDRESSAWARE:NO
+            /BASE:0x10000000 /HEAP:4096,4096)
+        target_compile_options(london PRIVATE
+            /W3 /wd4244 /wd4018 /wd4267 /wd4146
+            /wd4305 /wd4309 /wd4028 /wd4113 /bigobj)
+    endif()
+    message(STATUS "London 1969 target enabled")
+endif()
