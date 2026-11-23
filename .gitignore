@@ -44,3 +44,6 @@ __pycache__/
 # ours to distribute -- generate it locally with tools/run_pipeline.py.
 src/recomp/gen/
 src/recomp/gen_london69/
+
+# Game files from your own copy: never committed
+original/
