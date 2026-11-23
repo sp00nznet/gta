@@ -44,6 +44,7 @@ void mixer_voice_set_loop(int v, int count);     /* 0 or negative = forever */
 void mixer_voice_start(int v);
 void mixer_voice_stop(int v);
 int  mixer_voice_playing(int v);
+void mixer_voice_seek(int v, u32 byte_pos);          /* AIL_set_stream_position */
 u32  mixer_voice_position(int v);                /* bytes consumed from pcm */
 
 void mixer_set_master_volume(int vol);           /* 0..127 */

@@ -39,7 +39,7 @@ Keep game files in `original/` or `game/`: both are gitignored.
 The freeware build is an InstallShield installer. Extract its cabinets:
 
 ```bash
-python ../tools/tools/assets/isextract.py game/data1.cab game/data1.cab -o game/extracted_full
+python ../pcrecomp-gta/tools/assets/isextract.py game/data1.cab game/data1.cab -o game/extracted_full
 ```
 
 The archive spans `data1.cab` and `data2.cab`; all 195 files should extract.
@@ -101,9 +101,9 @@ an hour to lift), the relift on today's pcrecomp finds 4,211 more entry points
 and drops 176 that were never real -- every one of them a start in the middle
 of another instruction. It takes 12 minutes.
 
-Not yet: music (the game streams it, the mixer has not been told to start it),
-the game's resolution choice (it plays at 320x200), saved games, and
-multiplayer. Details in [docs/PROGRESS.md](docs/PROGRESS.md).
+It plays at the game's own 640x480, and the music plays: the front-end theme
+and the car radio, from the game's WAV tracks through the port's mixer. Not yet:
+saved games and multiplayer. Details in [docs/PROGRESS.md](docs/PROGRESS.md).
 
 ## Screenshots
 
@@ -146,6 +146,17 @@ when the file on disk is `LEVEL000.RAW`. The lifted `_output` decided sign with
 `test edx,edx / jg / jl`, and the second jump sat in a different basic block from
 the compare, where the lifter had discarded what set the flags. One branch, and
 every zero the CRT ever formatted came out negative.
+
+**The radio was switched off by one probe and one bad file.** At startup GTA1
+opens each of its ten radio tracks and asks Miles for its length; a length
+under 1 means "no such track", and one missing track switches the radio off for
+the whole game. The shim answered 0 for every length. Track8.wav was also broken:
+it spans the two install cabinets, and the extractor read all of it from the
+first. Then the mixer's 32-bit 16.16 position wrapped every three seconds.
+
+**It played at 320x200 because the shim offered 320x200.** The in-game mode is
+entry 0 of a table the game builds from `EnumDisplayModes`, unless the player
+picks another in Options. Real drivers do not list 320-wide modes; the shim did.
 
 **Four bytes, one million times.** `AIL_ms_count` is `@0`, not `@4`; the bridge
 popped one argument too many. The game busy-waits on it, so the stack pointer

@@ -69,6 +69,7 @@ s32     AIL_stream_status(HSTREAM stream);
 void    AIL_set_stream_loop_count(HSTREAM stream, s32 count);
 void    AIL_set_stream_volume(HSTREAM stream, s32 volume);
 void    AIL_set_stream_pan(HSTREAM stream, s32 pan);
+void    AIL_set_stream_position(HSTREAM stream, s32 offset);
 s32     AIL_stream_position(HSTREAM stream);
 void    AIL_stream_info(HSTREAM stream, s32 *datarate, s32 *sndtype, s32 *length, s32 *memory);
 

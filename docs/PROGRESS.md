@@ -100,17 +100,11 @@ in the middle of another instruction (0x401921 is inside the `mov` at
 - [x] Quit prompt, results screen, back to the menu, clean exit
 - [ ] Joystick
 - [x] Sound effects play (verified by mixer peak level)
-- [ ] Music plays (blocked: the game never calls `AIL_start_stream`)
+- [x] Music plays: front-end theme and car radio (verified against the track files, correlation 1.000)
 - [ ] Audio verified against the original
 - [ ] Save games
 
 ## Known gaps
-
-**Music.** `AIL_open_stream` loads `track1.wav` and the game never calls
-`AIL_start_stream` on it; not yet traced.
-
-**Resolution.** The game plays at 320x200 (MGL mode index 3). Where it takes
-that choice from is not yet traced; GTA_FORCE_MODE only covers the front end.
 
 **DirectDraw surfaces are never freed.** The shim's surface table and its
 scratch memory are bump-allocated: fine for one game and back to the menu, not

@@ -68,6 +68,8 @@ typedef struct {
     int voice;          /* mixer voice, or -1 */
     void *pcm;          /* decoded WAV, owned */
     u32 pcm_bytes;
+    u32 byte_rate;      /* bytes per second, from the WAV header */
+    u32 dig_format;     /* DIG_F_*: bit 0 16-bit, bit 1 stereo */
 } MSS_Stream;
 
 typedef struct {
@@ -341,6 +343,8 @@ HSTREAM AIL_open_stream(HDIGDRIVER dig, const char *filename, s32 stream_mem) {
                 g_streams[i].pcm = mixer_load_wav(filename, &nbytes, &rate, &bits, &chans);
                 if (g_streams[i].pcm) {
                     g_streams[i].pcm_bytes = nbytes;
+                    g_streams[i].byte_rate = (u32)(rate * (bits / 8) * chans);
+                    g_streams[i].dig_format = (bits == 16 ? 1u : 0u) | (chans == 2 ? 2u : 0u);
                     g_streams[i].voice = mixer_voice_alloc();
                     if (g_streams[i].voice >= 0)
                         mixer_voice_set_pcm(g_streams[i].voice, g_streams[i].pcm,
@@ -425,17 +429,28 @@ void AIL_set_stream_pan(HSTREAM stream, s32 pan) {
     if (str) str->pan = pan;
 }
 
+void AIL_set_stream_position(HSTREAM stream, s32 offset) {
+    MSS_Stream *str = get_stream(stream);
+    if (str && str->voice >= 0 && offset >= 0 && (u32)offset < str->pcm_bytes)
+        mixer_voice_seek(str->voice, (u32)offset);
+}
+
 s32 AIL_stream_position(HSTREAM stream) {
     MSS_Stream *str = get_stream(stream);
     if (!str || str->voice < 0) return 0;
     return (s32)mixer_voice_position(str->voice);
 }
 
+/* Miles: data rate in bytes per second, the DIG_F_ format, the length in
+ * bytes and the buffer memory. GTA1 probes its ten radio tracks with this at
+ * startup and treats a length below 1 as "no such track": answering 0 here
+ * switched the radio off for the whole game. */
 void AIL_stream_info(HSTREAM stream, s32 *datarate, s32 *sndtype, s32 *length, s32 *memory) {
-    if (datarate) *datarate = 22050;
-    if (sndtype) *sndtype = 1; /* PCM */
-    if (length) *length = 0;
-    if (memory) *memory = 0;
+    MSS_Stream *st = get_stream(stream);
+    if (datarate) *datarate = st ? (s32)st->byte_rate : 0;
+    if (sndtype)  *sndtype  = st ? (s32)st->dig_format : 0;
+    if (length)   *length   = st ? (s32)st->pcm_bytes : 0;
+    if (memory)   *memory   = 0;
 }
 
 /* --- Master volume --- */

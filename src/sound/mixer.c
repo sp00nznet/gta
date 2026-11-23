@@ -23,7 +23,8 @@ typedef struct {
     int   is_signed;   /* 8-bit only */
     int   volume, pan;
     int   loop;          /* remaining plays; <= 0 means forever */
-    u32   pos;           /* frame position, 16.16 fixed point */
+    unsigned long long pos;   /* frame position, 16.16 fixed point: 64-bit, or it
+                               * wraps after 65,536 frames (3 s of a radio track) */
     int   playing;
     int   allocated;
 } Voice;
@@ -144,7 +145,7 @@ static void mix_into(short *out, int frames) {
         gain_r = v->volume * v->pan * g_master;
 
         for (i = 0; i < frames; i++) {
-            u32 f = v->pos >> FRAC_BITS;
+            u32 f = (u32)(v->pos >> FRAC_BITS);
             int sl, sr;
 
             if (f >= total_frames) {
@@ -415,9 +416,18 @@ u32 mixer_voice_position(int v) {
     u32 r = 0;
     LOCK();
     if ((x = get(v)))
-        r = (x->pos >> FRAC_BITS) * (u32)x->channels * (u32)(x->bits / 8);
+        r = (u32)(x->pos >> FRAC_BITS) * (u32)x->channels * (u32)(x->bits / 8);
     UNLOCK();
     return r;
+}
+
+/* Move a voice to a byte offset in its PCM (AIL_set_stream_position). */
+void mixer_voice_seek(int v, u32 byte_pos) {
+    Voice *x;
+    LOCK();
+    if ((x = get(v)) && x->channels && x->bits)
+        x->pos = (unsigned long long)(byte_pos / ((u32)x->channels * (u32)(x->bits / 8))) << FRAC_BITS;
+    UNLOCK();
 }
 
 void mixer_set_master_volume(int vol) {

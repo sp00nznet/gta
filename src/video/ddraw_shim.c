@@ -477,9 +477,10 @@ static void enum_display_modes(u32 ctx, u32 callback) {
      * MGL's driver pick.
      */
     static const struct { u32 w, h, bpp; } modes[] = {
-        { 320, 200,  8 }, { 320, 200, 16 },
-        { 320, 240,  8 }, { 320, 240, 16 },
-        { 640, 400,  8 }, { 640, 400, 16 },
+        /* What a real display driver lists. The 320-wide modes used to be
+         * here too, and the in-game mode is entry 0 of the game's mode table
+         * unless the player picks another in Options -- so it played at
+         * 320x200, a mode no modern driver offers. */
         { 640, 480,  8 }, { 640, 480, 16 },
         { 800, 600,  8 }, { 800, 600, 16 },
         { 1024, 768, 8 }, { 1024, 768, 16 },

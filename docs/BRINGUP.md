@@ -635,3 +635,38 @@ and offset, which is how ntdll and wdmaud were told apart.)
 After that: the 16-bit front end ("Mission Pack #1: London 1969"), then
 `uk.cmp` and `uk\style001.g24`, the in-game mode, and the player in a car in
 West City, steered by scripted keys.
+
+## 640x480
+
+The game played at 320x200. `sub_00414DB0` sets the display mode: the front end
+asks for -2 (MGL mode 0x13, 640x480) and the game for the entry
+`[0x503224]` of its mode table (`0x504CD0`, 28-byte records), which the Options
+menu sets and which is 0 otherwise. The table is built from the modes MGL found,
+which are the modes `EnumDisplayModes` reported -- and the shim reported
+320x200 and 320x240 first. The game even records where 640x480 sits
+(`0x504CBC`) and falls back to it when a mode fails. The shim now lists what a
+real display driver lists, 640x480 and up, and entry 0 is 640x480. 800x600 and
+1024x768 are in the table for the Options menu.
+
+## Music
+
+GTA1's music is the radio, ten WAV tracks under `Music\`, streamed through
+Miles. The game never called `AIL_start_stream`, for three reasons:
+
+- `sub_0040C300` opens every track at startup and asks `AIL_stream_info` for its
+  length. Below 1 means missing, and a missing track switches music off
+  (`0x501AAC = 0`). The shim answered 0. It now answers the WAV's byte rate,
+  format and length.
+- Track8.wav, the file that spans `data1.cab` and `data2.cab`, had been
+  extracted from data1 alone: right length, no RIFF header, Track9's header
+  inside it. Real Miles fails to open that too, and the probe would switch music
+  off just the same. Fixed in pcrecomp's `isextract.py` (branch `gta`): a split
+  file is joined from the tail of one volume and the head of the next. Re-extract
+  if you extracted before.
+- The mixer kept a voice's position as a 32-bit 16.16 number, which wraps after
+  65,536 frames: three seconds of a radio track. It is 64-bit now, and
+  `AIL_set_stream_position` (the radio tuning in mid-song) seeks.
+
+Verified headless, muted, from `GTA_AUDIO_DUMP`: one-second slices of the mix
+match Track9 (front end) and Track2 (from 157.8 s, the car radio) at
+normalised cross-correlation 1.000.

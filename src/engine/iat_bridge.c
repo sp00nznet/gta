@@ -1019,7 +1019,8 @@ static void bridge_AIL_start_timer(void) {
 }
 static void bridge_AIL_stop_timer(void) { if (gt_ok(ARG(1))) g_gt[ARG(1)].running = 0; esp += 4+4; }
 static void bridge_AIL_set_preference(void) { esp += 4+8; }
-static void bridge_AIL_set_stream_position(void) { esp += 4+8; }
+static void bridge_AIL_set_stream_position(void) { AIL_set_stream_position((HSTREAM)(uintptr_t)ARG(1),(s32)ARG(2)); esp += 4+8; }
+/* Nothing to service: the whole track is decoded at open and the mixer plays it. */
 static void bridge_AIL_service_stream(void) { esp += 4+8; }
 
 /* ===== Smacker bridges ===== */
