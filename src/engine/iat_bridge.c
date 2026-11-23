@@ -296,8 +296,12 @@ static void bridge_GetCommandLineA(void) {
 }
 static void bridge_GetStartupInfoA(void) { GetStartupInfoA((STARTUPINFOA*)VA2PTR(ARG(1))); esp += 4+4; }
 static void bridge_GetVersionExA(void) { eax = GetVersionExA((OSVERSIONINFOA*)VA2PTR(ARG(1))); esp += 4+4; }
+/* The game's single-instance mutex ('Grand Theft Auto') is made per process:
+ * a network game between two copies on one machine needs both running. */
 static void bridge_CreateMutexA(void) {
     const char *name = ARG(3) ? VA2STR(ARG(3)) : NULL;
+    char own[128];
+    if (name) { _snprintf(own, sizeof own, "%s-%lu", name, GetCurrentProcessId()); own[sizeof own - 1] = 0; name = own; }
     fprintf(stderr, "    CreateMutexA(sec=%u, own=%u, name='%s')\n", ARG(1), ARG(2), name?name:"(null)");
     eax = (u32)(uintptr_t)CreateMutexA(ARG(1)?VA2PTR(ARG(1)):NULL, ARG(2), name);
     fprintf(stderr, "    -> handle=0x%X, GetLastError=%lu\n", eax, GetLastError());
@@ -358,8 +362,11 @@ static void bridge_HeapReAlloc(void) { eax = (u32)(uintptr_t)HeapReAlloc(heap_of
  * Which data files a screen does and does not reach for says more about where
  * it stopped than any function trace. */
 static int g_file_trace = -1;
+const char *coop_redirect(const char *path);   /* src/net/coop.c */
 static void bridge_CreateFileA(void) {
     const char *path = VA2STR(ARG(1));
+    const char *alt = coop_redirect(path);
+    if (alt) path = alt;
     HANDLE h = CreateFileA(path, ARG(2), ARG(3), ARG(4)?VA2PTR(ARG(4)):NULL, ARG(5), ARG(6), (HANDLE)(uintptr_t)ARG(7));
     if (g_file_trace < 0) {
         char b[8];
@@ -1102,162 +1109,8 @@ static void bridge_AIL_redbook_set_volume(void) { esp += 4+8;  }
 static void bridge_AIL_redbook_track_info(void) { eax = 0; esp += 4+16; }
 static void bridge_AIL_redbook_position(void)   { eax = 0; esp += 4+4;  }
 
-/* ===== DPLAYX bridges =====
- *
- * ordinal 1 = DirectPlayCreate(lpGUID, lplpDP, pUnk)
- * ordinal 2 = DirectPlayEnumerateA(callback, context)
- *
- * Enumerating is not optional, even for a single-player game. GTA1's front end
- * calls DirectPlayEnumerateA at state 0 and counts the service providers the
- * callback reports; the count gates everything downstream. With the old stub
- * returning E_FAIL and never calling back, the count stayed at zero, so state 0
- * never routed to state 15 or 16, so states 5 and 3 -- the two that promote the
- * audio mode -- were unreachable, and the play state span forever on a request
- * that could not succeed.
- *
- * So one provider is reported. The name and GUID are ours; the game copies the
- * GUID into its own list node and keeps the name pointer, so both have to live
- * in game-visible memory.
- */
-static u32 call_lifted(u32 va, const u32 *args, int n) {
-    recomp_func_t fn = recomp_lookup(va);
-    u32 saved_esp = esp, result;
-    int i;
-    if (!fn) {
-        fprintf(stderr, "  DPLAY: callback 0x%08X is not lifted\n", va);
-        return 0;
-    }
-    for (i = n - 1; i >= 0; i--) PUSH32(esp, args[i]);
-    PUSH32(esp, RECOMP_RETADDR);
-    fn();
-    result = eax;
-    esp = saved_esp;
-    return result;
-}
-
-#define DP_SLOTS 32
-#define DP_OK    0
-
-/* Stack slots per method, INCLUDING the `this` pointer -- the count the
- * dispatcher has to pop. Getting one of these wrong does not fail loudly: the
- * call returns, and the simulated stack is 4 bytes short for the rest of the
- * run. Three of these were short by one, which cost 8 bytes a frame and left
- * callee-saved registers restored from the wrong slots. */
-static const unsigned char k_dp_argc[DP_SLOTS] = {
-    3,  /* 0x00 QueryInterface(riid, ppv)                        */
-    1,  /* 0x04 AddRef()                                         */
-    1,  /* 0x08 Release()                                        */
-    3,  /* 0x0C AddPlayerToGroup(gid, pid)                       */
-    1,  /* 0x10 Close()                                          */
-    6,  /* 0x14 CreateGroup(lpid, name, data, size, flags)       */
-    7,  /* 0x18 CreatePlayer(lpid, name, hEvent, data, size, fl) */
-    3,  /* 0x1C DeletePlayerFromGroup(gid, pid)                  */
-    2,  /* 0x20 DestroyGroup(gid)                                */
-    2,  /* 0x24 DestroyPlayer(pid)                               */
-    6,  /* 0x28 EnumGroupPlayers(gid, guid, cb, ctx, flags)      */
-    5,  /* 0x2C EnumGroups(guid, cb, ctx, flags)                 */
-    5,  /* 0x30 EnumPlayers(guid, cb, ctx, flags)                */
-    6,  /* 0x34 EnumSessions(lpsd, timeout, cb, ctx, flags)      */
-    3,  /* 0x38 GetCaps(caps, flags)                             */
-    5,  /* 0x3C GetGroupData(gid, data, size, flags)             */
-    4,  /* 0x40 GetGroupName(gid, data, size)                    */
-    3,  /* 0x44 GetMessageCount(pid, count)                      */
-    4,  /* 0x48 GetPlayerAddress(pid, data, size)                */
-    4,  /* 0x4C GetPlayerCaps(pid, caps, flags)                  */
-    5,  /* 0x50 GetPlayerData(pid, data, size, flags)            */
-    4,  /* 0x54 GetPlayerName(pid, data, size)                   */
-    3,  /* 0x58 GetSessionDesc(data, size)                       */
-    2,  /* 0x5C Initialize(guid)                                 */
-    3,  /* 0x60 Open(lpsd, flags)                                */
-    6,  /* 0x64 Receive(from, to, flags, data, size)             */
-    6,  /* 0x68 Send(from, to, flags, data, size)                */
-    5,  /* 0x6C SetGroupData(gid, data, size, flags)             */
-    4,  /* 0x70 SetGroupName(gid, name, flags)                   */
-    5,  /* 0x74 SetPlayerData(pid, data, size, flags)            */
-    4,  /* 0x78 SetPlayerName(pid, name, flags)                  */
-    3   /* 0x7C SetSessionDesc(lpsd, flags)                      */
-};
-
-static u32 g_dp_vtable;
-static u32 g_dp_object;
-static struct { unsigned char slot; } g_dp_method[512];
-
-static void dp_dispatch(void) {
-    int slot = g_dp_method[g_bridge_hit].slot;
-    int argc = slot < DP_SLOTS ? k_dp_argc[slot] : 1;
-
-    /* +0x60 is Open: the game checks the result and proceeds to build its
-     * session. Everything else it calls is teardown or a no-op for a session
-     * that never leaves this machine. */
-    if (g_file_trace > 0)
-        fprintf(stderr, "  DPLAY: IDirectPlay slot %d (+0x%02X), %d args\n",
-                slot, slot * 4, argc);
-    switch (slot) {
-    case 0:   /* QueryInterface(riid, ppv) -- hand back the same object, or the
-               * caller proceeds with whatever was in the output pointer. */
-        if (ARG(3)) MEM32(ARG(3)) = g_dp_object;
-        eax = DP_OK;
-        break;
-    case 1:   eax = 1; break;      /* AddRef  */
-    case 2:   eax = 0; break;      /* Release */
-    default:  eax = DP_OK; break;
-    }
-    esp += 4 + 4 * argc;
-}
-
-static void dp_make_object(void) {
-    int i;
-    if (g_dp_object) return;
-    g_dp_vtable = recomp_scratch_alloc(DP_SLOTS * 4);
-    for (i = 0; i < DP_SLOTS; i++) {
-        u32 cookie = recomp_alloc_bridge("IDirectPlay", dp_dispatch);
-        g_dp_method[cookie - BRIDGE_BASE].slot = (unsigned char)i;
-        MEM32(g_dp_vtable + i * 4) = cookie;
-    }
-    g_dp_object = recomp_scratch_alloc(8);
-    MEM32(g_dp_object) = g_dp_vtable;
-    fprintf(stderr, "  DPLAY: IDirectPlay object 0x%08X (%d slots)\n",
-            g_dp_object, DP_SLOTS);
-}
-
-static void bridge_dplay_create(void) {
-    /* DirectPlayCreate(lpGUID, lplpDP, pUnkOuter) */
-    dp_make_object();
-    if (ARG(2)) MEM32(ARG(2)) = g_dp_object;
-    eax = DP_OK;
-    esp += 4+12;
-}
-
-static void bridge_dplay_enumerate(void) {
-    u32 cb = ARG(1), ctx = ARG(2);
-    static u32 guid_va, name_va;
-    u32 args[5];
-
-    if (!guid_va) {
-        /* A GUID of our own. The game only stores and compares it. */
-        static const unsigned char guid[16] = {
-            0x36,0x3B,0x58,0x5A,0x3B,0xE1,0x11,0xD0,
-            0x9C,0x0B,0x00,0xA0,0xC9,0x06,0x28,0x02
-        };
-        int i;
-        guid_va = recomp_scratch_alloc(16);
-        for (i = 0; i < 16; i++) MEM8(guid_va + i) = guid[i];
-        name_va = recomp_scratch_str("Local Connection");
-    }
-
-    args[0] = guid_va;      /* lpguidSP        */
-    args[1] = name_va;      /* lpSPName        */
-    args[2] = 9;            /* dwMajorVersion  */
-    args[3] = 0;            /* dwMinorVersion  */
-    args[4] = ctx;          /* lpContext       */
-
-    if (cb) {
-        fprintf(stderr, "  DPLAY: enumerating 1 service provider\n");
-        call_lifted(cb, args, 5);
-    }
-    eax = 0;                /* DP_OK */
-    esp += 4+8;
-}
+/* ===== DPLAYX: src/net/dplay.c ===== */
+#include "../net/dplay.h"
 
 #endif /* _WIN32 */
 
@@ -1425,8 +1278,8 @@ void setup_iat_bridges(void) {
     register_bridge("AIL_redbook_set_volume", bridge_AIL_redbook_set_volume);
     register_bridge("AIL_redbook_track_info", bridge_AIL_redbook_track_info);
     register_bridge("AIL_redbook_position", bridge_AIL_redbook_position);
-    register_bridge("ordinal_1", bridge_dplay_create);
-    register_bridge("ordinal_2", bridge_dplay_enumerate);
+    register_bridge("ordinal_1", dplay_bridge_create);
+    register_bridge("ordinal_2", dplay_bridge_enumerate);
 
     /* mss32.dll (38 functions) */
     register_bridge("AIL_stream_position", bridge_AIL_stream_position);

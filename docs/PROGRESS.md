@@ -65,10 +65,11 @@ in the middle of another instruction (0x401921 is inside the `mov` at
 - [x] Smacker shim (8 ordinals)
 - [x] KERNEL32/USER32/GDI32/ADVAPI32 to real Win32 pass-through
 - [x] WINMM to real Win32 joystick pass-through
-- [x] DPLAYX stub (returns `E_FAIL`)
+- [x] DirectPlay: `IDirectPlay2A` over TCP (src/net/dplay.c), two-copy network game, loopback and LAN
+- [x] Co-op on the campaign (`--coop`, src/net/coop.c)
 - [x] DirectDraw shim: our own COM vtables, 75 slots
 - [x] Registry shim for `HKLM\SOFTWARE\DMA Design\Grand Theft Auto`
-- [ ] SciTech MGL to OpenGL 4.x renderer
+- [x] Remaster: D3D11 presenter, 720p-4K Hor+, XInput pad, F10 settings (docs/remaster.md)
 - [ ] Cross-platform SDL2 windowing and input
 
 ## Phase 5: Build and run

@@ -161,7 +161,7 @@ if ((Test-Path $Exe) -and -not $Force) {
       Say "  Unzipping $g"
       Expand-Archive $g $cabs -Force
     }
-    if (-not (Test-Path (Join-Path $cabs 'data1.cab'))) { Fail "no data1.cab in $cabs: that is not GTA's installer." }
+    if (-not (Test-Path (Join-Path $cabs 'data1.cab'))) { Fail "no data1.cab in ${cabs}: that is not GTA's installer." }
     Run "Extracting the installer's cabinets" ($pyargs + @((Join-Path $Toolkit 'tools\assets\isextract.py'),
         (Join-Path $cabs 'data1.cab'), (Join-Path $cabs 'data1.cab'), '-o', (Join-Path $Root 'game\extracted_full')))
   }

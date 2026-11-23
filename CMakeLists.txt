@@ -62,6 +62,10 @@ add_executable(gta1
     src/remaster/hires.c
     src/remaster/pad.c
 
+    # Network play: DirectPlay over TCP
+    src/net/dplay.c
+    src/net/coop.c
+
     # Generated recompiled code
     ${GTA1_RECOMP_SOURCES}
 )
@@ -145,6 +149,8 @@ if(LONDON_RECOMP_SOURCES)
         src/remaster/present.c
         src/remaster/hires.c
         src/remaster/pad.c
+        src/net/dplay.c
+        src/net/coop.c
         ${LONDON_RECOMP_SOURCES}
     )
     target_include_directories(london PRIVATE

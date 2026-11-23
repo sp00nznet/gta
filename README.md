@@ -1,21 +1,46 @@
 # Grand Theft Auto -- Static Recompilation
 
+**[Download the installer](https://github.com/sp00nznet/gta/releases)** (Windows), or run `Setup.cmd`. You need the game: Rockstar's freeware release, or your own disc.
+
 A static recompilation of the original **Grand Theft Auto** (1997) by DMA Design,
-targeting modern Windows. No emulation: the original x86 machine code is lifted
-to compilable C, linked against modern replacements for the legacy APIs, and
-compiled into a native executable.
+and its mission pack **GTA: London 1969**, targeting modern Windows. No
+emulation: the original x86 machine code is lifted to compilable C, linked
+against modern replacements for the legacy APIs, and compiled into a native
+executable -- with the remaster the game never had, built around its own code.
 
 Built on the [pcrecomp](https://github.com/sp00nznet/pcrecomp) toolchain, with
 no commercial tools: pcrecomp's own disassembler finds the functions and its
 lifter writes the C.
 
-It plays. You walk the streets of Liberty City, take a car and drive it.
-
-![Driving through Liberty City, rendered by the recompiled executable](docs/ingame_driving.png)
+![Liberty City at 3840x2160, widescreen, drawn by the recompiled game](docs/screenshots/4k.jpg)
 
 *Every pixel comes from the game's own code: the recompiled renderer drawing
-into a DirectDraw flipping chain the port builds out of its own COM vtables.
-Captured from that surface, not from the screen.*
+into the port's DirectDraw, at 3840x2160. Captured from that surface, not from
+the screen.*
+
+## What the remaster adds
+
+- **Its own window**: a Direct3D 11 presenter, resizable or borderless
+  fullscreen (F11, Alt+Enter), sharp at any size and on high-DPI screens.
+- **Scaling** (F12): sharp-bilinear by default, smooth, CRT, nearest, or whole
+  multiples only.
+- **A settings menu** (F10, or right-click): resolution, scaling, fullscreen,
+  the controller, without editing an INI.
+- **High resolution and widescreen**: 1280x720 up to 3840x2160 and
+  ultrawide 3440x1440, Hor+, so wider screens show more of the city
+  ([remaster.md](docs/remaster.md)).
+- **Xbox controller** (XInput), mapped to the game's own keys by
+  `controller.ini`.
+- **Network play**, as shipped: GTA1's own four-player deathmatch through
+  its own DirectPlay, between copies on one machine or over a LAN
+  ([multiplayer.md](docs/multiplayer.md)).
+- **Co-op** (`--coop`, a mod): the network game on the single-player
+  campaign -- the same city and missions, players side by side
+  ([coop.md](docs/coop.md)).
+- **One-click setup**: `Setup.cmd` or the installer extract, lift, patch and
+  build from your copy.
+
+`--classic` gives the original 640x480 window.
 
 ## Getting Started
 
@@ -26,13 +51,31 @@ files, and nothing from the game is downloaded for you.
 *Rockstar Classics* free downloads. Rockstar no longer hosts it; its own page
 survives on the Internet Archive:
 [Rockstar Classics -- Grand Theft Auto](https://web.archive.org/web/20041223112508/http://www.rockstargames.com:80/classics/gta.html).
-Use that, or your own retail disc.
+Use that (its `GTAINSTALLER.zip`), or your own retail disc.
 
 **GTA: London 1969** was never part of the freeware release (only the later
 London 1961 add-on was, and it needs GTA1 and London 1969 to run). For London,
 bring your own copy.
 
-Keep game files in `original/` or `game/`: both are gitignored.
+### The installer (easiest)
+
+1. Download `GTA-Recomp-Installer-windows-x64.exe` from the
+   [latest release](https://github.com/sp00nznet/gta/releases). It isn't
+   signed: if SmartScreen asks, **More info**, then **Run anyway**.
+2. Point it at `GTAINSTALLER.zip`, a folder holding its `data1.cab`, or an
+   extracted copy, and press **Build**.
+3. **Play**.
+
+### The setup script
+
+1. Download this repository (**Code**, then **Download ZIP**) and unzip it
+   somewhere with 3 GB free.
+2. Double-click **`Setup.cmd`** and give it `GTAINSTALLER.zip` when it asks.
+3. Play with `Grand Theft Auto (recomp)` in that folder.
+
+It asks before installing anything (Python, the Visual Studio Build Tools),
+then extracts, lifts, patches and builds; about 20 minutes the first time,
+and a rerun skips finished steps. By hand, it is these four steps:
 
 ### 1. Extract the game
 
@@ -52,10 +95,11 @@ python tools/patch_gen.py
 ```
 
 About 12 minutes. That catalogs the executable with pcrecomp's `disasm32`
-(kept in `work/`) and writes the C into `src/recomp/gen/`. The lifted C is
-machine-translated from the game, so it is generated on your machine and never
-checked in. `tools/lift.py` finds pcrecomp at `../pcrecomp-gta` or
-`../pcrecomp`, or wherever `PCRECOMP` points.
+(kept in `work/`) and writes the C into `src/recomp/gen/`; `patch_gen.py`
+applies the remaster's hooks to it. The lifted C is machine-translated from the
+game, so it is generated on your machine and never checked in.
+`tools/lift.py` finds pcrecomp at `../pcrecomp-gta` or `../pcrecomp`, or
+wherever `PCRECOMP` points.
 
 ### 3. Build
 
@@ -79,45 +123,75 @@ Run from the directory holding the executable: the game finds its data as
 `0x400000` so the lifted code can read its `.rdata` and `.data`. It is never
 run.
 
+| | |
+|---|---|
+| `--res 2560x1440` | the in-game resolution (the front end is always 640x480) |
+| `--view 75` | zoom out: percent of the original camera scale |
+| `--scale crt`, `--fullscreen` | the presenter's starting state |
+| `--join 192.168.1.20` | where a network game's host is |
+| `--coop` | network games are co-op on the campaign |
+| `--classic` | the original window |
+
 Controls are the game's defaults: arrows to move, Enter to get in or out of a
 car, Ctrl to attack, Space to brake, Z/X to change weapon, Tab special, Esc to
-quit.
+quit. In the game: F10 settings, F11 fullscreen, F12 scaling.
 
 ## Status
 
-**Playable in Liberty City and in London.** In GTA1: the front end, a city loaded through its own
-menu, walking, stealing a car and driving it through traffic, the quit prompt,
-the results screen, and a clean exit. London 1969 reaches its own menu and
-plays: it starts you in a car in West City.
+**Playable, remastered, networked.** In GTA1: the front end, Liberty City,
+walking, stealing and driving through traffic, the radio, the quit prompt and
+a clean exit; 640x480 to 3840x2160; a two-player network game on one machine
+and over the LAN; co-op on the campaign. London 1969 reaches its own menu and
+plays, in the presenter at 640x480.
 
 | | Grand Theft Auto | GTA: London 1969 |
 |---|---|---|
 | Functions found | 6,625 entries, 2,203 bodies (95.7% of `.text`) | 9,954 entries, 5,150 bodies (75.8% of `.text`) |
 | Lifted to C | 0 errors | 0 errors |
-| How far it runs | **in game**: walk, drive, quit | **in game**: its menu, then driving through West City |
+| Remaster | presenter, 720p-4K Hor+, pad, F10, setup | presenter, pad (640x480) |
+| Network | deathmatch, two copies, loopback and LAN; co-op | not tried |
 
-Against the August lift (2,590 functions from a hand-run discovery pipeline,
-an hour to lift), the relift on today's pcrecomp finds 4,211 more entry points
-and drops 176 that were never real -- every one of them a start in the middle
-of another instruction. It takes 12 minutes.
-
-It plays at the game's own 640x480, and the music plays: the front-end theme
-and the car radio, from the game's WAV tracks through the port's mixer. Not yet:
-saved games and multiplayer. Details in [docs/PROGRESS.md](docs/PROGRESS.md).
+Not yet: saved games, four players at once, co-op's shared score and friendly
+fire ([coop.md](docs/coop.md)), London's widescreen. Details in
+[docs/PROGRESS.md](docs/PROGRESS.md).
 
 ## Screenshots
 
 From the game's own DirectDraw surface, headless and muted.
 
+**1920x1080**, Hor+: the camera's scale follows the height, so 16:9 shows
+the 4:3 picture and more of the city to the sides.
+
+![1920x1080](docs/screenshots/widescreen-1080p.jpg)
+
+**Co-op**: the host's screen (left) and the partner's (right), the two players
+at the campaign's start in Liberty City, each copy drawing the same street.
+
 | | |
 |---|---|
-| ![On foot in Liberty City](docs/ingame_street.png) | ![Traffic at a junction](docs/ingame_traffic.png) |
-| ![The quit prompt](docs/ingame_quit_prompt.png) | ![The title screen](docs/title_screen.png) |
+| ![Co-op, the host](docs/screenshots/coop-host.png) | ![Co-op, the partner](docs/screenshots/coop-partner.png) |
+| ![Network: the host gathering](docs/screenshots/net-gather.png) | ![Network: deathmatch, the joiner](docs/screenshots/net-deathmatch.jpg) |
+| ![The presenter window, sharp-bilinear](docs/screenshots/presenter-window.jpg) | ![The original 640x480](docs/screenshots/original-640x480.png) |
+| ![On foot in Liberty City](docs/ingame_street.png) | ![The title screen](docs/title_screen.png) |
 | ![London 1969: West City](docs/london_westcity.png) | ![London 1969: the main menu](docs/london_menu.png) |
 
 ## The Interesting Bugs
 
 A recompilation fails a long way from its cause, so these are worth recording.
+
+**4K wrote over the list of video modes.** At 3840x2160 the game crashed after
+the mode change, reading a null out of its own mode table. Nothing had freed
+it: the frame's row table -- one address per scanline, in `.data` at 0x503228 --
+has room for 1706 rows, and the 2160th row lands on the mode table's pointer.
+Its 110 uses in the lifted C now point at a bigger table.
+
+**F12 opened the game's own video menu.** The presenter took F12 for its
+scaling in the window procedure, and the game took it too: it reads keys in
+its own message loop as well. The presenter's keys now leave the queue in
+`PeekMessageA`.
+
+**The second copy quit.** For a network game on one machine, the second copy
+found the first one's single-instance mutex and left without a word.
 
 **The front end was never stuck.** For a month the open problem was "the front
 end never starts the loaded game": after Liberty City loaded, the game span on
@@ -193,22 +267,29 @@ src/
   engine/       Runtime, IAT bridges, image loader, premap launcher
   video/        DirectDraw shim, Smacker shim
   sound/        waveOut mixer replacing the Miles Sound System
-  renderer/     Modern OpenGL 4.x, replacing SciTech MGL (not yet wired)
-  net/          Network play replacing DirectPlay (stub)
+  remaster/     The presenter, high resolution, the pad, settings
+  net/          DirectPlay over TCP; co-op
   recomp/gen/           Lifted GTA1   (generated, never committed)
   recomp/gen_london69/  Lifted London (generated, never committed)
 tools/
   lift.py          Catalog (pcrecomp disasm32) and lift (pcrecomp drive32)
-  patch_gen.py     Post-lift hooks: soft FatalError, the remaster's resolution
+  patch_gen.py     Post-lift patches: hooks, line patches, a moved table
   run.py           Run a build on a private hidden desktop, muted
+  net_pair.sh      A network game between two hidden copies
+  setup.ps1        Setup.cmd: extract, lift, patch, build
 docs/
   TECHNICAL.md   Engine, binary, formats, import surface
   BRINGUP.md     How it gets 0x400000, diagnostics, the fix log
   PROGRESS.md    Phase-by-phase detail and known gaps
+  remaster.md    The presenter, widescreen, the pad, setup
+  multiplayer.md The network game and the DirectPlay behind it
+  coop.md        Co-op: the design and what the game allows
 ```
 
 The lifted code's CPU contract is pcrecomp's `runtime/recomp32/recomp_types.h`;
-the runtime, bridges and shims here are this project's own.
+the runtime, bridges and shims here are this project's own. The presenter and
+the controller mapper come from the Gunman Chronicles recomp, the setup script
+from Gunman's and Red Alert 2's.
 
 ## Documentation
 
@@ -217,12 +298,18 @@ the runtime, bridges and shims here are this project's own.
 - [docs/BRINGUP.md](docs/BRINGUP.md): how the image gets its original base, the
   diagnostic switches, scripted input, and the full fix log
 - [docs/PROGRESS.md](docs/PROGRESS.md): phase checklists and known gaps
+- [docs/remaster.md](docs/remaster.md): the presenter, high resolution and
+  widescreen (five fixes in the game's own code), the controller, setup
+- [docs/multiplayer.md](docs/multiplayer.md): network play, the ten DirectPlay
+  methods the game uses, testing two copies
+- [docs/coop.md](docs/coop.md): co-op -- how levels and missions are built, the
+  design, what is done and what is not
 
 ## License
 
 The code in this repository is released under the [MIT License](LICENSE). That
 covers this project's own source: the runtime, the IAT bridges, the DirectDraw,
-Miles and Smacker shims, the launcher and the tooling.
+Miles, Smacker and DirectPlay shims, the remaster, the launcher and the tooling.
 
 It does **not** cover Grand Theft Auto. The game's binary, assets and data
 remain the property of their owners and are not distributed here. Neither is the

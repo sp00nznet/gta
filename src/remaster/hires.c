@@ -122,5 +122,5 @@ uint32_t hires_view_width(uint32_t v) {
     uint32_t w = MEM32(v + 8), h = MEM32(v + 0xC);
     if (!s_on || !h) return w;
     MEM8(v + 0x2C) = 0;                          /* square pixels */
-    return (uint32_t)(((uint64_t)h * 4 * 100) / (3 * (uint64_t)g_rm.view));
+    return (uint32_t)(((uint64_t)h * 4 * (uint64_t)g_rm.view) / 300);
 }

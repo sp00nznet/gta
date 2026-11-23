@@ -23,6 +23,8 @@ HOOKS = {   # function -> the line put at its top (GTA1 addresses)
     # the game's mode table sees them, and the in-game mode change.
     'sub_0048B770': 'extern int hires_mode_resolution(void); if (hires_mode_resolution()) { eax = 1; esp += 4; return; }',
     'sub_00414CC0': 'extern void hires_on_change_mode(void); hires_on_change_mode();',
+    # set the mission number: --coop plays a network game on the campaign (src/net/coop.c)
+    'sub_0044AB50': 'extern void coop_on_set_mission(void); coop_on_set_mission();',
 }
 
 LINES = {   # instruction address -> its replacement

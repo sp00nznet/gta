@@ -8,14 +8,20 @@
  *   controller=1
  *   view=100              the city's zoom, percent of the original (less shows more)
  *   window=100,100,1600,900
+ *   [net]
+ *   join=192.168.1.20      where a network game's host is (127.0.0.1)
+ *   port=2350              the port it listens on
+ *   coop=1                 network games are co-op on the campaign (docs/coop.md)
  *
- *   --classic  --res WxH  --view PCT  --scale NAME  --fullscreen  --windowed  --no-pad
+ *   --classic  --res WxH  --view PCT  --scale NAME   --fullscreen  --windowed  --no-pad
+ *   --join ADDR[:PORT]  --port N  --coop
  */
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "remaster.h"
+#include "../net/dplay.h"
 
 remaster_t g_rm = { 0, 1280, 720, SCALE_SHARP, 0, 1, 100 };
 
@@ -44,6 +50,9 @@ static void load(void) {
     g_rm.fullscreen = GetPrivateProfileIntA("remaster", "fullscreen", 0, s_ini);
     g_rm.pad = GetPrivateProfileIntA("remaster", "controller", 1, s_ini);
     g_rm.view = GetPrivateProfileIntA("remaster", "view", 100, s_ini);
+    GetPrivateProfileStringA("net", "join", g_dp_join, g_dp_join, sizeof g_dp_join, s_ini);
+    g_dp_port = GetPrivateProfileIntA("net", "port", g_dp_port, s_ini);
+    g_coop = GetPrivateProfileIntA("net", "coop", 0, s_ini);
     if (GetPrivateProfileStringA("remaster", "window", "", v, sizeof v, s_ini))
         sscanf(v, "%d,%d,%d,%d", &g_rm.win_x, &g_rm.win_y, &g_rm.win_w, &g_rm.win_h);
 }
@@ -76,6 +85,9 @@ void remaster_parse_args(int *argc, char **argv) {
         else if (!strcmp(a, "--res") && i + 1 < *argc) sscanf(argv[++i], "%dx%d", &g_rm.res_w, &g_rm.res_h);
         else if (!strcmp(a, "--scale") && i + 1 < *argc) g_rm.scale = scale_from(argv[++i]);
         else if (!strcmp(a, "--view") && i + 1 < *argc) g_rm.view = atoi(argv[++i]);
+        else if (!strcmp(a, "--join") && i + 1 < *argc) lstrcpynA(g_dp_join, argv[++i], sizeof g_dp_join);
+        else if (!strcmp(a, "--port") && i + 1 < *argc) g_dp_port = atoi(argv[++i]);
+        else if (!strcmp(a, "--coop")) g_coop = 1;
         else argv[o++] = argv[i];
     }
     *argc = o;
