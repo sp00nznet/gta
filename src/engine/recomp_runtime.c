@@ -330,8 +330,13 @@ void recomp_dump_trace(const char *why) {
 /* ===== crash handler ===== */
 #ifdef _WIN32
 static LONG WINAPI crash_handler(EXCEPTION_POINTERS *ep) {
-    fprintf(stderr, "\n=== CRASH: exception 0x%08lX at %p ===\n",
-            ep->ExceptionRecord->ExceptionCode, ep->ExceptionRecord->ExceptionAddress);
+    extern const char *recomp_bridge_name(uint32_t va);
+    const uint32_t *hs = (const uint32_t *)(uintptr_t)ep->ContextRecord->Esp;
+    const char *cookie = recomp_bridge_name((uint32_t)(uintptr_t)ep->ExceptionRecord->ExceptionAddress);
+    fprintf(stderr, "\n=== CRASH: exception 0x%08lX at %p%s%s ===\n",
+            ep->ExceptionRecord->ExceptionCode, ep->ExceptionRecord->ExceptionAddress,
+            cookie ? ", the bridge cookie of " : "", cookie ? cookie : "");
+    fprintf(stderr, "  host stack: %08X %08X %08X %08X %08X %08X\n", hs[0], hs[1], hs[2], hs[3], hs[4], hs[5]);
     fprintf(stderr, "  eax=%08X ecx=%08X edx=%08X ebx=%08X\n", g_eax, g_ecx, g_edx, g_ebx);
     fprintf(stderr, "  esi=%08X edi=%08X esp=%08X\n", g_esi, g_edi, g_esp);
     recomp_dump_trace("VEH");

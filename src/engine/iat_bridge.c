@@ -63,6 +63,11 @@ u32 g_bridge_hit;
 /* A callable address the lifted dispatcher resolves to `handler`, with no IAT
  * slot behind it -- for pointers we hand the game ourselves (GetProcAddress
  * results, COM vtable slots). */
+/* The import a bridge cookie stands for, or NULL: names a cookie the host was asked to execute. */
+const char *recomp_bridge_name(u32 va) {
+    return (va >= BRIDGE_BASE && va - BRIDGE_BASE < (u32)num_bridges) ? bridges[va - BRIDGE_BASE].name : NULL;
+}
+
 u32 recomp_alloc_bridge(const char *name, void (*handler)(void)) {
     if (num_bridges >= MAX_BRIDGES) {
         fprintf(stderr, "  BRIDGE: table full, '%s' unbridged\n", name);
@@ -654,7 +659,6 @@ static void bridge_CreateWindowExA(void) {
 /* Imported by this build but previously unbridged -- the old hand-written VA
  * table had them mapped to other functions' slots. */
 static void bridge_SetFocus(void) { eax = (u32)(uintptr_t)SetFocus((HWND)(uintptr_t)ARG(1)); esp += 4+4; }
-static void bridge_SetWindowLongA(void) { eax = (u32)SetWindowLongA((HWND)(uintptr_t)ARG(1), (int)ARG(2), (LONG)ARG(3)); esp += 4+12; }
 static void bridge_PostMessageA(void) { eax = PostMessageA((HWND)(uintptr_t)ARG(1), ARG(2), ARG(3), ARG(4)); esp += 4+16; }
 static void bridge_ShowCursor(void) { eax = (u32)ShowCursor((BOOL)ARG(1)); esp += 4+4; }
 static void bridge_SetWindowPlacement(void) { eax = SetWindowPlacement((HWND)(uintptr_t)ARG(1), (const WINDOWPLACEMENT*)VA2PTR(ARG(2))); esp += 4+8; }
@@ -741,6 +745,25 @@ static void bridge_RegisterClassA(void) {
     eax = RegisterClassA(wc);
     wc->lpfnWndProc = original;  /* leave the game's struct as it found it */
     esp += 4+4;
+}
+/* MGL subclasses the game window (0x48C8D0) with SetWindowLongA(GWL_WNDPROC).
+ * Passed through raw, Windows ran the original image's code for every message
+ * and died on its first import -- GetKeyState when Esc was pressed, which was
+ * "the quit crash". A guest proc goes through a thunk like RegisterClassA's,
+ * and a thunk handed back as the old proc is turned back into its guest VA so
+ * the game can call it the way it called it before. */
+static void bridge_SetWindowLongA(void) {
+    LONG v = (LONG)ARG(3);
+    int i;
+    if ((int)ARG(2) == GWL_WNDPROC && ARG(3)) {
+        WNDPROC thunk = route_wndproc(ARG(3));
+        if (thunk) v = (LONG)(uintptr_t)thunk;
+    }
+    eax = (u32)SetWindowLongA((HWND)(uintptr_t)ARG(1), (int)ARG(2), v);
+    if ((int)ARG(2) == GWL_WNDPROC)
+        for (i = 0; i < g_wndproc_count; i++)
+            if ((u32)(uintptr_t)g_wndproc_thunks[i] == eax) { eax = g_wndproc_va[i]; break; }
+    esp += 4+12;
 }
 static void bridge_SetTimer(void) { eax = (u32)(uintptr_t)SetTimer((HWND)(uintptr_t)ARG(1), ARG(2), ARG(3), (TIMERPROC)(uintptr_t)ARG(4)); esp += 4+16; }
 static void bridge_KillTimer(void) { eax = KillTimer((HWND)(uintptr_t)ARG(1), ARG(2)); esp += 4+8; }
