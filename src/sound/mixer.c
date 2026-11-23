@@ -30,7 +30,7 @@ typedef struct {
 
 static Voice g_voice[MIXER_VOICES];
 static int   g_master = 127;
-static int   g_running;
+static volatile int g_running;   /* read by the mixer thread */
 static int   g_trace;
 static int   g_peak;
 static int   g_mute;
@@ -280,7 +280,10 @@ void mixer_shutdown(void) {
     if (!g_running) return;
     g_running = 0;
     SetEvent(g_event);
-    WaitForSingleObject(g_thread, 500);
+    /* Until it has really gone: the lock and event are deleted below, and a
+     * mixer thread still inside waveOutWrite took London down in ntdll. */
+    WaitForSingleObject(g_thread, INFINITE);
+    CloseHandle(g_thread);
     waveOutReset(g_dev);
     for (i = 0; i < NUM_BUFS; i++) {
         waveOutUnprepareHeader(g_dev, &g_hdr[i], sizeof(WAVEHDR));

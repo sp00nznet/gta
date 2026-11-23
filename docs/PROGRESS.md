@@ -21,9 +21,15 @@ Phase-by-phase checklist. The README carries the summary; this is the long form.
 - [ ] London 1961 disassembly
 - [ ] GTA2 (blocked: TAC-packed)
 
-Five discovery rounds settle at **2,590 functions** for GTA1. Rounds 4 and 5
-come entirely from the data scan and its follow-on -- 382 functions reachable
-only through pointers in `.data`.
+**Relifted on pcrecomp main (November).** `tools/lift.py` runs pcrecomp's own
+`disasm32` catalog and `drive32` lifter -- no IDA, no hand-run discovery rounds.
+GTA1: **6,625 entries** (2,203 lifted bodies, 4,422 alias stubs for entries
+inside another body), 95.7% of `.text` covered, 0 errors, 12 minutes.
+
+The August lift had 2,590 functions from five hand-run discovery rounds and
+took about an hour. All but 176 of them are in the new catalog; those 176 start
+in the middle of another instruction (0x401921 is inside the `mov` at
+0x40191F), so dropping them is a fix.
 
 ## Phase 2: Classification
 
@@ -37,7 +43,7 @@ only through pointers in `.data`.
 
 ## Phase 3: Code lifting
 
-- [x] GTA1: **2,590 functions, 952,581 lines of C, 0 errors**
+- [x] GTA1: **6,625 entries, 449,254 lines of C, 0 errors** (August: 2,590 functions, 952,581 lines)
 - [x] London 1969: 3,813 functions, 0 errors (2,137 before the discovery fixes)
 - [x] Global register model (`eax`-`esp`, plus global `ebp`)
 - [x] Memory access via VA translation (`ADDR()` / `MEM32()`)
@@ -46,6 +52,8 @@ only through pointers in `.data`.
 - [x] Correct function entry blocks
 - [x] Flags evaluated correctly across basic blocks
 - [x] London 1969 re-lifted on the current toolkit: **3,813 functions**, 0 errors
+- [x] London 1969 on pcrecomp main: **9,954 entries** (5,150 bodies), 75.8% of `.text`, 0 errors, 4 minutes
+- [x] London 1969 in game: its menu, `uk.cmp`, driving through West City
 - [ ] London 1961 lifting
 - [ ] GTA2 lifting (blocked)
 
@@ -81,14 +89,16 @@ only through pointers in `.data`.
 - [x] Mission selection -- the menu sets the mission number and
       `sub_0044AB90` parses `mission.ini`
 - [x] The city loads: `nyc.cmp` and `style001.g24` read in full
-- [ ] Starting the game (state 3 is skipped; see Known gaps)
-- [ ] In-game rendering
+- [x] Starting the game
+- [x] In-game rendering: the city at 320x200, through a primary and seven back buffers
 
 ## Phase 6: Playable
 
-- [ ] Keyboard and joystick input through to the game
-- [ ] City map and style loading through the game's own path
-- [ ] Gameplay loop
+- [x] Keyboard input through to the game (default bindings from GTA Settings)
+- [x] City map and style loading through the game's own path
+- [x] Gameplay loop: walking, stealing a car, driving, traffic, the score
+- [x] Quit prompt, results screen, back to the menu, clean exit
+- [ ] Joystick
 - [x] Sound effects play (verified by mixer peak level)
 - [ ] Music plays (blocked: the game never calls `AIL_start_stream`)
 - [ ] Audio verified against the original
@@ -96,23 +106,19 @@ only through pointers in `.data`.
 
 ## Known gaps
 
-**The game loads Liberty City but cannot start it.** Driven with
-`GTA_KEYS=0x0D,0x28,0x0D,0x28,0x0D` the front end walks 0 -> 7 -> 11 -> 8 -> 6
-and opens `nyc.cmp` and `style001.g24`, reading both in full -- through its own
-menu, no forcing. It then spins: state 3, which promotes the audio mode, is
-skipped, so `sub_00412A90` returns -1 forever and the play state waits on it.
-The port takes a "resume" arm of the menu branch where it should take "start".
-See docs/BRINGUP.md.
+**Music.** `AIL_open_stream` loads `track1.wav` and the game never calls
+`AIL_start_stream` on it; not yet traced.
 
-**The quit path faults, and not where I thought.** `VK_ESCAPE` faults at
-`0xB0000053`, a bridge cookie executed as code. The earlier write-up blamed CRT
-teardown after `ExitProcess`; that is wrong -- `ExitProcess` is never reached,
-its bridge never logs. Both `RECOMP_ICALL` and `RECOMP_ITAIL` resolve import
-cookies correctly, so the transfer is coming from somewhere else. Unresolved.
+**Resolution.** The game plays at 320x200 (MGL mode index 3). Where it takes
+that choice from is not yet traced; GTA_FORCE_MODE only covers the front end.
 
-`bridge_ExitProcess` now calls the real `ExitProcess` rather than the CRT's
-`exit()`, which is what the game asked for and avoids running host atexit
-handlers with a lifted window proc on the stack. It does not fix this crash.
+**DirectDraw surfaces are never freed.** The shim's surface table and its
+scratch memory are bump-allocated: fine for one game and back to the menu, not
+for many. A freelist when it matters.
+
+**Miles timers** fire only when the callback is the plain counter GTA1 uses
+(`mov eax,[g] / inc eax / mov [g],eax / ret`); any other is reported and does
+not run, since lifted code cannot run on a second thread.
 
 **Rendering path.** Frames reach the screen through `StretchDIBits`, not the
 OpenGL renderer the project is aiming at. Correct, and not fast.

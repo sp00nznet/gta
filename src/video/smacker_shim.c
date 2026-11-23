@@ -10,12 +10,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+/* The handle is the game's Smack*: it reads the SDK's fields straight out of
+ * it and writes some back, so it has to be the real struct's size with the
+ * header where the SDK puts it. A 20-byte struct here let London scribble
+ * over the host heap, which surfaced much later as a fault in ntdll or
+ * wdmaud during AIL_shutdown. */
 typedef struct {
-    int active;
-    u32 frames;
+    u32 Version, Width, Height, Frames, MSPerFrame;   /* SDK header, offsets 0..0x10 */
+    u8  sdk_rest[0x1000 - 5 * 4];                     /* ponytail: zeroed, never decoded */
     u32 current_frame;
-    u32 width;
-    u32 height;
 } SmackState;
 
 HSMACK SmackOpen(const char *name, u32 flags, u32 extrabuf) {
@@ -24,11 +27,11 @@ HSMACK SmackOpen(const char *name, u32 flags, u32 extrabuf) {
 
     SmackState *state = (SmackState *)calloc(1, sizeof(SmackState));
     if (state) {
-        state->active = 1;
-        state->frames = 1; /* Pretend 1 frame so we finish immediately */
-        state->current_frame = 0;
-        state->width = 640;
-        state->height = 480;
+        state->Version = 0x324B4D53;   /* "SMK2" */
+        state->Frames = 1;             /* pretend 1 frame so we finish immediately */
+        state->Width = 640;
+        state->Height = 480;
+        state->MSPerFrame = 66;
     }
     return (HSMACK)state;
 }
@@ -49,7 +52,7 @@ u32 SmackNextFrame(HSMACK smk) {
     SmackState *state = (SmackState *)smk;
     if (state) {
         state->current_frame++;
-        if (state->current_frame >= state->frames) {
+        if (state->current_frame >= state->Frames) {
             return SMACKDONE;
         }
     }

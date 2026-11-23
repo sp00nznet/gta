@@ -39,6 +39,7 @@ carries its own instruments.
 | `GTA_DUMP_FRAMES=n` | writes the first n presented frames to `frameNNN.bmp`, with a count of non-zero bytes |
 | `GTA_FORCE_MODE=0x13` | forces an MGL mode index instead of letting the game pick |
 | `GTA_KEYS=7:0x0D,11:0x28` | posts virtual-key codes to the game window in order; `STATE:VK` waits until the front-end state is STATE before sending |
+| `GTA_KEYS=...,+15000,0x26*3000` | `+MS` just waits; `VK*MS` holds a key for MS milliseconds (auto-repeating), which is how in-game movement is scripted |
 | `GTA_KEY_STATE=5101d0` | which global `STATE:` waits on (default is the front-end state) |
 | `GTA_KEY_MS=n` | milliseconds between scripted keys (default 2000) |
 | `GTA_KEY_DELAY_MS=n` | wait before the first scripted key (default 3000) |
@@ -76,6 +77,12 @@ single failed check does not hide everything behind it.
 | 16 | Flag state carried across a fallthrough edge | `test edx,edx / jg / jl` lost its flags at the second jcc, so the 64-bit sign test read a stale carry |
 | 17 | Runtime flag kind for joins (`recomp_cond`) | 474 branches whose predecessors set flags with different instructions, including the `and/jns/dec/or/inc/je` signed-modulo idiom |
 | 18 | `AIL_startup`, `AIL_shutdown`, `AIL_ms_count` are `@0`, not `@4` | the game busy-waits on `AIL_ms_count`, so 4 bytes over-popped per call walked esp off the top of the simulated stack after ~1M calls |
+| 19 | Relift on pcrecomp main (`disasm32` + `drive32`) and its `recomp_types.h` | 6,625 entries in 12 minutes; 176 August entries were mid-instruction starts |
+| 20 | `EnumAttachedSurfaces` calls the game's callback; a complex primary is a ring of back buffers | the in-game renderer never found its back buffers and looped forever asking |
+| 21 | Surface table 8 -> 32, scratch 4 -> 16 MB | the in-game chain (primary + 7) did not fit beside the front end's surfaces |
+| 22 | Miles timers tick (host thread bumps GTA's counter at the set rate) | the frame limiter spun on a counter nothing incremented |
+| 23 | Default key bindings from GTA Settings' "Default Keys" table | every binding read 0: the game ran and no key moved the player |
+| 24 | `SetWindowLongA(GWL_WNDPROC)` routes a guest proc through a thunk | Windows ran MGL's original subclass proc (0x48C8D0) natively; the quit crash |
 
 Fixes 15 through 17 are one story. All three left a conditional branch reading
 whatever carry happened to be lying around, and together they accounted for 598
@@ -119,20 +126,31 @@ that gap, and the control run is the proof:
 The dispatch count is identical because those are the window's own paint and
 timer messages; only the key messages make the game read the keyboard.
 
-### Known: the quit path faults
+### The quit path (fixed)
 
-Sending `VK_ESCAPE` makes the game call `ExitProcess`, which is correct. The
-process then faults at `0xB0000053` -- a bridge cookie being *executed* rather
-than dispatched. Both `ExitProcess` and `CompareStringW` (cookie 0x53) are
-registered bridges, so this is not a missing import.
+Sending `VK_ESCAPE` used to fault at `0xB0000053`, a bridge cookie executed as
+code. Two write-ups guessed at CRT teardown after `ExitProcess`; both were wrong.
 
-Unconfirmed reading: the fault is one slot below the `ExitProcess` cookie sitting
-in `esi`, and it happens with the WndProc thunk still on the host stack, having
-switched to the simulated stack. `bridge_ExitProcess` calls the host CRT's
-`exit()` and never returns, so that thunk never unwinds. Something in the
-teardown then runs against a half-torn-down stack. Not yet diagnosed.
+The crash report now names the import when the host executes a cookie, and
+prints the host stack. That said `GetKeyState`, with a return address of
+`0x0048C91E` -- inside the **original image**. Windows was calling
+`0x48C8D0` itself: MGL subclasses the game window with
+`SetWindowLongA(GWL_WNDPROC, 0x48C8D0)`, and the bridge passed the guest address
+to user32 untouched. Every message after that ran 1997 machine code natively,
+whose IAT slots hold bridge cookies; the first message that reached an import
+was the Esc key's `GetKeyState`.
+
+`bridge_SetWindowLongA` now routes a guest proc through a thunk, exactly as
+`RegisterClassA` does, and returns a thunk as the guest address it stands for.
+Esc at the menu exits with `ExitProcess(0)`; from a game the whole path runs:
+the "Ya want out?" prompt, Enter, the results screen (state 13), the menu (7),
+Esc, state 10, `ExitProcess(0)`.
 
 ## Where the front end stops
+
+*Historical: this section and the next few record the August search. The
+conclusion -- that the front end never starts the game -- was wrong; see
+[Into the game](#into-the-game).*
 
 Input reaches the game and the menu responds to it: watching `sub_0044AB50`,
 the mission-number setter, shows it called with `0` at startup and then with
@@ -546,3 +564,74 @@ Nothing here was specific to London. Every one of these was a latent assumption
 that only one binary had ever been run through -- a hardcoded symbol, a constant
 that happened to fit, a lifter case that happened not to occur, an import set
 that happened to be complete.
+
+## Into the game
+
+The open question for a month was "the front end never starts the loaded game".
+It did. `sub_00412A90` returning -1, which looked like the play state spinning
+on a request that could never succeed, is the game asking *which network player
+am I* -- and -1 is the single-player answer. Its eighty-nine callers are all
+over the game logic. `0x501D7C == 2` means "networked", not "audio promoted".
+
+With frames dumped past the load the real picture was plain: after `nyc.cmp`
+and `style001.g24`, the game tears the front end down, calls
+`SetDisplayMode(320, 200, 16)` and creates a complex primary with seven back
+buffers. Then three walls, one after the other:
+
+**EnumAttachedSurfaces was a stub.** `sub_00491BF0` locks the primary, then walks
+its flipping chain with `EnumAttachedSurfaces` and the callback at `0x491D30`,
+storing each attached surface in `0x4B500C[n]` until it has as many as it asked
+for. The stub returned `DD_OK` without calling back, so the count never grew and
+the function looped forever: 1.4 million enumerations in one run. The shim now
+calls the callback, and a complex primary is a ring -- primary, back 1 .. back n,
+primary -- that `Flip` rotates. The callback checks `DDSCAPS_BACKBUFFER` on the
+first surface, so the description passed to it has to be right. Seven back
+buffers then overflowed the shim's eight-entry surface table beside the front
+end's two; the table is 32 now.
+
+**The Miles timer never ticked.** `sub_0047DC80` is the frame limiter:
+`cmp [0x775580], eax / jb` back to itself, no calls in the loop. `0x775580` is
+bumped by `0x47DC70`, a callback registered with `AIL_register_timer` at 70 Hz.
+The bridge dropped the callback address, ignored the frequency and relied on
+SDL timers this build does not have. Lifted code cannot run on a second thread
+-- the registers are globals -- but the callback is the whole of
+`mov eax,[g] / inc eax / mov [g],eax / ret 4`, so a host thread does exactly that
+increment, at the rate the game set. A callback of any other shape is reported
+and does not fire.
+
+**No key was bound.** The world drew and the traffic moved, and the arrows did
+nothing. The game reads ten scan-code bindings from
+`HKLM\SOFTWARE\DMA Design\Grand Theft Auto\Controls` (`sub_0046E8D0`), and the
+port's synthetic registry answered 0 for all of them. The real defaults are in
+`GTA Settings.exe`'s "Default Keys" table at `0x404768` -- left, right, up, down
+arrows, Space, Enter, Ctrl, X, Z, Tab -- and the London release's `gta.reg`
+carries the identical ten. Scripted arrows also need the extended-key bit in
+`lParam`, or `0xC8` arrives as `0x48`, keypad 8.
+
+With those, `GTA_KEYS=7:0x0D,11:0x0D,8:0x0D,+15000,0x0D,+3000,0x26*4000` starts
+a game, takes the nearest car ("Bulldog" on the name banner) and drives it up
+the street through traffic, the camera pulling back with the speed.
+
+## London 1969 in game
+
+Relifted on pcrecomp main: 9,954 entries (5,150 bodies), 0 errors, four
+minutes. With the GTA1 fixes it still stopped before its menu, for two reasons
+GTA1 never exercised:
+
+**`SmackToBufferRect` said there was always another rect.** Ordinal 28 returns
+non-zero while a frame still has dirty rectangles to blit, and London's intro
+player loops on it. The stub returned 1, forever. It decodes nothing, so it now
+returns 0.
+
+**The Smack handle was 20 bytes.** `SmackOpen` handed the game a host `calloc`
+of the shim's own five fields as its `Smack*`. The game reads the SDK's fields
+out of that pointer and writes some back, and London's writes landed in the
+host heap. Nothing failed there: it surfaced later as a fault in ntdll, then in
+wdmaud, during `AIL_shutdown` -- and once as `0xC0000374`, heap corruption,
+which is what gave it away. The handle is now the real struct's size with the
+header where the SDK puts it. (The crash report also now names the host module
+and offset, which is how ntdll and wdmaud were told apart.)
+
+After that: the 16-bit front end ("Mission Pack #1: London 1969"), then
+`uk.cmp` and `uk\style001.g24`, the in-game mode, and the player in a car in
+West City, steered by scripted keys.

@@ -1032,7 +1032,9 @@ static void bridge_SmackToBuffer(void) { esp += 4+28; }
 /* ordinal 33 is SmackSoundUseMSS(1), not SmackSoundUseDirectSound. */
 static void bridge_SmackSoundUseMSS(void) { esp += 4+4; }
 /* ordinal 28 is SmackToBufferRect(2); ordinal 23 is the 7-arg SmackToBuffer. */
-static void bridge_SmackToBufferRect(void) { eax=1; esp += 4+8; }
+/* Non-zero means "another dirty rect to blit", and callers loop on it: London
+ * span here forever. The stub decodes nothing, so there is never a rect. */
+static void bridge_SmackToBufferRect(void) { eax=0; esp += 4+8; }
 
 /* ===== imports London needs that GTA1 never calls =====
  *
