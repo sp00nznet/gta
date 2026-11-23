@@ -37,7 +37,7 @@ if(NOT GTA1_RECOMP_SOURCES)
         "The lifted C is generated from your own copy of the game, not shipped "
         "with this repository. Generate it first:\n"
         "  python tools/lift.py \"<path to>/Grand Theft Auto.exe\"\n"
-        "  python tools/soften_fatal.py")
+        "  python tools/patch_gen.py")
 endif()
 
 # --- GTA1 target ---
@@ -55,6 +55,12 @@ add_executable(gta1
     src/sound/mixer.c
     src/video/smacker_shim.c
     src/video/ddraw_shim.c
+
+    # The remaster: presenter, resolution, pad, settings
+    src/remaster/settings.c
+    src/remaster/present.c
+    src/remaster/hires.c
+    src/remaster/pad.c
 
     # Generated recompiled code
     ${GTA1_RECOMP_SOURCES}
@@ -88,7 +94,7 @@ if(OpenGL_FOUND)
 endif()
 
 if(WIN32)
-    target_link_libraries(gta1 PRIVATE ws2_32 winmm)
+    target_link_libraries(gta1 PRIVATE ws2_32 winmm d3d11 dxgi dxguid shell32)
 endif()
 
 # Critical linker settings for recompiled code
@@ -135,6 +141,10 @@ if(LONDON_RECOMP_SOURCES)
         src/sound/mixer.c
         src/video/smacker_shim.c
         src/video/ddraw_shim.c
+        src/remaster/settings.c
+        src/remaster/present.c
+        src/remaster/hires.c
+        src/remaster/pad.c
         ${LONDON_RECOMP_SOURCES}
     )
     target_include_directories(london PRIVATE
@@ -149,7 +159,7 @@ if(LONDON_RECOMP_SOURCES)
         target_compile_definitions(london PRIVATE HAS_SDL2=0)
     endif()
     if(WIN32)
-        target_link_libraries(london PRIVATE ws2_32 winmm)
+        target_link_libraries(london PRIVATE ws2_32 winmm d3d11 dxgi dxguid shell32)
     endif()
     if(MSVC)
         # Identical to gta1: the image has to land at its original base, so the

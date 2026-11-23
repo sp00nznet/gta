@@ -52,7 +52,7 @@ carries its own instruments.
 
 The runtime also prints the game's own error buffer and decodes its
 `FatalError(msgId, line, ...)` calls, whose line number names the failing check.
-`tools/soften_fatal.py` patches that function to return instead of exiting, so a
+`tools/patch_gen.py` patches that function to return instead of exiting, so a
 single failed check does not hide everything behind it.
 
 ## Fix log

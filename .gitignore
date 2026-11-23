@@ -48,3 +48,6 @@ src/recomp/gen_london69/
 # Game files from your own copy: never committed
 original/
 work/
+
+# Setup.cmd output
+*.lnk

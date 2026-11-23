@@ -18,6 +18,7 @@
 #include "recomp_runtime.h"
 #include <stdio.h>
 #include <string.h>
+#include "../remaster/remaster.h"
 
 
 #ifndef GTA_IMAGE_BASE
@@ -46,11 +47,20 @@ int  premap_relaunch(const char *game_exe);
 static const char *g_exe_path = "game/extracted/WINO/Grand Theft Auto.exe";
 
 int main(int argc, char *argv[]) {
+    remaster_parse_args(&argc, argv);
     if (argc > 1) g_exe_path = argv[1];
 
     /* First invocation is the launcher: it reserves 0x400000 in a suspended
      * copy of us, because nothing running inside this process can get there. */
     if (!premap_is_child()) return premap_relaunch(g_exe_path);
+
+    /* The presenter draws at the window's real pixels. Unaware, Windows would
+     * stretch the finished picture by the display scale and blur it. */
+    if (!g_rm.classic) {
+        typedef BOOL (WINAPI *dpi_fn)(HANDLE);
+        dpi_fn set = (dpi_fn)GetProcAddress(GetModuleHandleA("user32.dll"), "SetProcessDpiAwarenessContext");
+        if (set) set((HANDLE)(intptr_t)-4);   /* DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 */
+    }
 
     /* Image first: it is the only mapping that must land at a fixed VA. */
     if (!load_original_data(g_exe_path)) return 1;

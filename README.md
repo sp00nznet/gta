@@ -48,7 +48,7 @@ The archive spans `data1.cab` and `data2.cab`; all 195 files should extract.
 
 ```bash
 python tools/lift.py "game/extracted_full/WINO/Grand Theft Auto.exe"
-python tools/soften_fatal.py
+python tools/patch_gen.py
 ```
 
 About 12 minutes. That catalogs the executable with pcrecomp's `disasm32`
@@ -199,7 +199,7 @@ src/
   recomp/gen_london69/  Lifted London (generated, never committed)
 tools/
   lift.py          Catalog (pcrecomp disasm32) and lift (pcrecomp drive32)
-  soften_fatal.py  Post-lift patch so one failed check does not hide the rest
+  patch_gen.py     Post-lift hooks: soft FatalError, the remaster's resolution
   run.py           Run a build on a private hidden desktop, muted
 docs/
   TECHNICAL.md   Engine, binary, formats, import surface

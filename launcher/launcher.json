@@ -1,0 +1,17 @@
+{
+  "title": "Grand Theft Auto",
+  "repo": "sp00nznet/gta",
+  "accent": "#e8b020",
+  "note": {
+    "default": "The first build takes about 20 minutes and 3 GB. Python (with pefile and capstone) and the Visual Studio Build Tools with CMake (about 6 GB) are installed if they are missing; Windows asks for permission once. Choose Rockstar's freeware GTAINSTALLER.zip, a folder holding its data1.cab, or an extracted copy."
+  },
+  "game": {
+    "name": "Grand Theft Auto",
+    "files": ["GTAINSTALLER.zip|data1.cab|WINO/Grand Theft Auto.exe"]
+  },
+  "sources": [{ "repo": "sp00nznet/pcrecomp", "ref": "gta", "dir": "pcrecomp" }],
+  "setup": {
+    "default": ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "tools\setup.ps1", "-Yes", "-Game", "{game}"]
+  },
+  "play": "Grand Theft Auto (recomp).lnk"
+}

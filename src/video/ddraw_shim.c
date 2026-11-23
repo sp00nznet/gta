@@ -31,6 +31,7 @@
 #include "../engine/recomp_runtime.h"
 #include <string.h>
 #include <stdlib.h>
+#include "../remaster/remaster.h"
 
 #define DD_OK              0x00000000u
 #define DDERR_UNSUPPORTED  0x80004001u
@@ -246,6 +247,7 @@ static void fill_rect(int di, int l, int t, int r, int b, u32 colour) {
 }
 
 static void dump_frame(int idx);   /* defined below; see GTA_DUMP_FRAMES */
+static void shots_tick(int idx);   /* GTA_SHOTS */
 
 /*
  * Put the surface on screen. GDI understands both formats directly: a 256-entry
@@ -259,6 +261,19 @@ static void present(int idx) {
     int i;
 
     if (!g_hwnd || idx < 0 || !g_surf[idx].bits) return;
+    shots_tick(idx);
+
+    if (!g_rm.classic) {
+        static DWORD pal32[256];
+        if (g_surf[idx].bpp == 8)
+            for (i = 0; i < 256; i++)
+                pal32[i] = ((DWORD)g_pal[i].peRed << 16) | ((DWORD)g_pal[i].peGreen << 8) | g_pal[i].peBlue;
+        if (present_frame(g_hwnd, (void *)(uintptr_t)ADDR(g_surf[idx].bits), (int)g_surf[idx].w,
+                          (int)g_surf[idx].h, (int)g_surf[idx].bpp, pal32)) {
+            dump_frame(idx);
+            return;
+        }
+    }
 
     memset(&bmi, 0, sizeof(bmi));
     bmi.h.biSize        = sizeof(BITMAPINFOHEADER);
@@ -307,8 +322,53 @@ static void present(int idx) {
 static int g_dump_left = -1;
 static int g_frame_no;
 
+static void write_bmp(int idx, const char *path);
+
 static void dump_frame(int idx) {
     char path[64];
+    if (g_dump_left < 0) {
+        char buf[16];
+        g_dump_left = GetEnvironmentVariableA("GTA_DUMP_FRAMES", buf, sizeof(buf))
+                    ? atoi(buf) : 0;
+    }
+    if (g_dump_left <= 0) return;
+    sprintf(path, "frame%03d.bmp", g_frame_no++);
+    write_bmp(idx, path);
+    g_dump_left--;
+}
+
+/* GTA_SHOTS=20,35,50: the presented surface at those seconds after the first
+ * frame, as shot_<s>.bmp in the working directory (GTA_SHOT_DIR elsewhere).
+ * The game's own pixels, whatever the window shows. */
+static void shots_tick(int idx) {
+    static char list[256];
+    static int init, next;
+    static DWORD t0;
+    char path[MAX_PATH], dir[MAX_PATH];
+    const char *p;
+    int i, sec;
+    if (!init) {
+        init = 1;
+        if (!GetEnvironmentVariableA("GTA_SHOTS", list, sizeof list)) list[0] = 0;
+        t0 = GetTickCount();
+    }
+    if (!list[0]) return;
+    sec = (int)((GetTickCount() - t0) / 1000);
+    for (p = list, i = 0; *p; i++) {
+        int t = atoi(p);
+        if (i == next && sec >= t) {
+            if (!GetEnvironmentVariableA("GTA_SHOT_DIR", dir, sizeof dir)) strcpy(dir, ".");
+            sprintf(path, "%s\\shot_%03d.bmp", dir, t);
+            write_bmp(idx, path);
+            next++;
+            return;
+        }
+        while (*p && *p != ',') p++;
+        if (*p) p++;
+    }
+}
+
+static void write_bmp(int idx, const char *path) {
     FILE *f;
     u32 w = g_surf[idx].w, h = g_surf[idx].h, bpp = g_surf[idx].bpp;
     u32 row = (w * 3 + 3) & ~3u;         /* 24-bit BMP rows are 4-byte aligned */
@@ -319,14 +379,6 @@ static void dump_frame(int idx) {
     u32 x, y;
     int nonzero = 0;
 
-    if (g_dump_left < 0) {
-        char buf[16];
-        g_dump_left = GetEnvironmentVariableA("GTA_DUMP_FRAMES", buf, sizeof(buf))
-                    ? atoi(buf) : 0;
-    }
-    if (g_dump_left <= 0) return;
-
-    sprintf(path, "frame%03d.bmp", g_frame_no++);
     f = fopen(path, "wb");
     if (!f) return;
     line = (unsigned char *)malloc(row);
@@ -365,7 +417,6 @@ static void dump_frame(int idx) {
     }
     free(line);
     fclose(f);
-    g_dump_left--;
     {   /* Distinguish "nothing drawn" from "drawn but the palette is black":
          * the game clears to index 0 and sets its palette later. */
         u32 n = w * h * (bpp / 8), k, nz = 0;
@@ -408,14 +459,25 @@ static void fill_caps(u32 p) {
                                 DDCAPS_CANBLTSYSMEM;
     MEM32(p + DC_PALCAPS)     = DDPCAPS_8BIT | DDPCAPS_PRIMARYSURFACE |
                                 DDPCAPS_ALLOW256;
-    MEM32(p + DC_VIDMEMTOTAL) = 4u * 1024u * 1024u;
-    MEM32(p + DC_VIDMEMFREE)  = 4u * 1024u * 1024u;
+    /* MGL divides this by a mode's page size to count its pages, and drops a
+     * mode with none: 4 MB was too little for anything past 1024x768x16, and the
+     * table it rebuilds after a 4K mode set dropped modes with too few. */
+    MEM32(p + DC_VIDMEMTOTAL) = 1536u * 1024u * 1024u;
+    MEM32(p + DC_VIDMEMFREE)  = 1536u * 1024u * 1024u;
 }
 
 static u32 make_object(int iface) {
     u32 obj = recomp_scratch_alloc(8);
     MEM32(obj) = g_vtable[iface];
     return obj;
+}
+
+/* Surface memory. VA == host address, and the exe is not large-address-aware,
+ * so VirtualAlloc lands where the game can reach it. A 3840x2160 primary with
+ * seven back buffers is 130 MB: scratch is for small things. */
+static u32 surface_alloc(u32 n) {
+    void *p = VirtualAlloc(NULL, n, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    return p ? (u32)(uintptr_t)p : recomp_scratch_alloc(n);
 }
 
 static u32 create_surface(u32 desc_va) {
@@ -434,7 +496,7 @@ static u32 create_surface(u32 desc_va) {
     i = g_surf_count++;
     g_surf[i].obj        = make_object(IF_SURFACE);
     g_surf[i].bpp        = g_mode_bpp;
-    g_surf[i].bits       = recomp_scratch_alloc(w * h * (g_mode_bpp / 8));
+    g_surf[i].bits       = surface_alloc(w * h * (g_mode_bpp / 8));
     g_surf[i].w          = w;
     g_surf[i].h          = h;
     g_surf[i].caps       = caps;
@@ -454,7 +516,7 @@ static u32 create_surface(u32 desc_va) {
             int b = g_surf_count++;
             g_surf[b].obj        = make_object(IF_SURFACE);
             g_surf[b].bpp        = g_mode_bpp;
-            g_surf[b].bits       = recomp_scratch_alloc(w * h * (g_mode_bpp / 8));
+            g_surf[b].bits       = surface_alloc(w * h * (g_mode_bpp / 8));
             g_surf[b].w          = w;
             g_surf[b].h          = h;
             g_surf[b].caps       = DDSCAPS_BACKBUFFER;
@@ -474,29 +536,29 @@ static void enum_display_modes(u32 ctx, u32 callback) {
      * MGL numbers its modes by resolution AND depth, and the game asks for a
      * specific number (0x13). Offering one depth registers only that slice of
      * the table, so advertise both 8- and 16-bit for each resolution and let
-     * MGL's driver pick.
+     * MGL's driver pick. What a real display driver lists: the 320-wide modes
+     * used to be here too, and the in-game mode is entry 0 of the game's mode
+     * table unless the player picks another in Options -- so it played at
+     * 320x200. The remaster adds the widescreen modes (src/remaster/hires.c),
+     * 16-bit only: the front end is 640x480x8.
      */
-    static const struct { u32 w, h, bpp; } modes[] = {
-        /* What a real display driver lists. The 320-wide modes used to be
-         * here too, and the in-game mode is entry 0 of the game's mode table
-         * unless the player picks another in Options -- so it played at
-         * 320x200, a mode no modern driver offers. */
-        { 640, 480,  8 }, { 640, 480, 16 },
-        { 800, 600,  8 }, { 800, 600, 16 },
-        { 1024, 768, 8 }, { 1024, 768, 16 },
-    };
-    const int n = (int)(sizeof(modes) / sizeof(modes[0]));
     u32 desc = recomp_scratch_alloc(SD_DESC_SIZE);
-    int i;
+    int i, n = hires_mode_count(), sent = 0;
 
     for (i = 0; i < n; i++) {
-        u32 args[2];
-        write_surface_desc(desc, modes[i].w, modes[i].h, 0, 0, modes[i].bpp);
-        args[0] = desc;
-        args[1] = ctx;
-        if (call_game(callback, args, 2) != DDENUMRET_OK) break;
+        u32 args[2], w, h;
+        int d;
+        hires_mode(i, &w, &h);
+        for (d = (i < 3 ? 0 : 1); d < 2; d++) {
+            write_surface_desc(desc, w, h, 0, 0, d ? 16 : 8);
+            args[0] = desc;
+            args[1] = ctx;
+            if (call_game(callback, args, 2) != DDENUMRET_OK) goto done;
+            sent++;
+        }
     }
-    fprintf(stderr, "  DDRAW: EnumDisplayModes offered %d modes (%u-bit surfaces)\n", i, SCREEN_BPP);
+done:
+    fprintf(stderr, "  DDRAW: EnumDisplayModes offered %d modes\n", sent);
 }
 
 /* One handler behind every vtable slot; g_bridge_hit says which. */
@@ -712,6 +774,8 @@ static u32 g_create_bridge, g_createclipper_bridge;
 
 void ddraw_shim_init(void) {
     int iface, slot, i;
+
+    hires_init();       /* before MGL looks at its mode tables */
 
     for (iface = 0; iface < IF_COUNT; iface++) {
         u32 vt = recomp_scratch_alloc((u32)k_slots[iface] * 4);

@@ -545,6 +545,12 @@ static void start_mission_thread(void) {
 }
 
 static HWND g_game_hwnd;
+/* Once the remaster's presenter has the game window (src/remaster/present.c),
+ * its place, size and style are the player's: the game sizing it to its
+ * display mode, or making it a topmost popup, would undo them. */
+extern int g_present_owns_window;
+WNDPROC present_swap_game_proc(WNDPROC p);
+#define OWNED(h) (g_present_owns_window && (HWND)(uintptr_t)(h) == g_game_hwnd)
 
 /*
  * A key may be written as STATE:VK, meaning "wait until the front-end state
@@ -661,12 +667,28 @@ static void bridge_CreateWindowExA(void) {
 static void bridge_SetFocus(void) { eax = (u32)(uintptr_t)SetFocus((HWND)(uintptr_t)ARG(1)); esp += 4+4; }
 static void bridge_PostMessageA(void) { eax = PostMessageA((HWND)(uintptr_t)ARG(1), ARG(2), ARG(3), ARG(4)); esp += 4+16; }
 static void bridge_ShowCursor(void) { eax = (u32)ShowCursor((BOOL)ARG(1)); esp += 4+4; }
-static void bridge_SetWindowPlacement(void) { eax = SetWindowPlacement((HWND)(uintptr_t)ARG(1), (const WINDOWPLACEMENT*)VA2PTR(ARG(2))); esp += 4+8; }
+static void bridge_SetWindowPlacement(void) { eax = OWNED(ARG(1)) ? 1 : SetWindowPlacement((HWND)(uintptr_t)ARG(1), (const WINDOWPLACEMENT*)VA2PTR(ARG(2))); esp += 4+8; }
 static void bridge_DestroyWindow(void) { eax = DestroyWindow((HWND)(uintptr_t)ARG(1)); esp += 4+4; }
-static void bridge_ShowWindow(void) { eax = ShowWindow((HWND)(uintptr_t)ARG(1), (int)ARG(2)); esp += 4+8; }
+static void bridge_ShowWindow(void) {
+    eax = OWNED(ARG(1)) ? 1 : ShowWindow((HWND)(uintptr_t)ARG(1), (int)ARG(2));
+    esp += 4+8;
+}
 static void bridge_UpdateWindow(void) { eax = UpdateWindow((HWND)(uintptr_t)ARG(1)); esp += 4+4; }
 static void bridge_DefWindowProcA(void) { eax = (u32)DefWindowProcA((HWND)(uintptr_t)ARG(1), ARG(2), ARG(3), ARG(4)); esp += 4+16; }
-static void bridge_PeekMessageA(void) { eax = PeekMessageA((MSG*)VA2PTR(ARG(1)), (HWND)(uintptr_t)ARG(2), ARG(3), ARG(4), ARG(5)); esp += 4+20; }
+/* The game reads keys in its own message loop as well as in its window
+ * procedure, so the presenter's keys (F10-F12, Alt+Enter) are taken out of
+ * the queue here and handed to the presenter alone: F12 also opened the
+ * game's own in-game video mode menu. */
+int present_takes_message(const MSG *m);
+static void bridge_PeekMessageA(void) {
+    MSG *m = (MSG*)VA2PTR(ARG(1));
+    for (;;) {
+        eax = PeekMessageA(m, (HWND)(uintptr_t)ARG(2), ARG(3), ARG(4), ARG(5));
+        if (!eax || !(ARG(5) & PM_REMOVE) || !present_takes_message(m)) break;
+        DispatchMessageA(m);
+    }
+    esp += 4+20;
+}
 static void bridge_TranslateMessage(void) { eax = TranslateMessage((MSG*)VA2PTR(ARG(1))); esp += 4+4; }
 static void bridge_DispatchMessageA(void) { eax = (u32)DispatchMessageA((MSG*)VA2PTR(ARG(1))); esp += 4+4; }
 static void bridge_PostQuitMessage(void) { PostQuitMessage((int)ARG(1)); esp += 4+4; }
@@ -759,7 +781,15 @@ static void bridge_SetWindowLongA(void) {
         WNDPROC thunk = route_wndproc(ARG(3));
         if (thunk) v = (LONG)(uintptr_t)thunk;
     }
-    eax = (u32)SetWindowLongA((HWND)(uintptr_t)ARG(1), (int)ARG(2), v);
+    if (OWNED(ARG(1)) && ((int)ARG(2) == GWL_STYLE || (int)ARG(2) == GWL_EXSTYLE)) {
+        eax = (u32)GetWindowLongA((HWND)(uintptr_t)ARG(1), (int)ARG(2));
+        esp += 4+12;
+        return;
+    }
+    if (OWNED(ARG(1)) && (int)ARG(2) == GWL_WNDPROC)
+        eax = (u32)(uintptr_t)present_swap_game_proc((WNDPROC)(uintptr_t)v);   /* the presenter stays on top */
+    else
+        eax = (u32)SetWindowLongA((HWND)(uintptr_t)ARG(1), (int)ARG(2), v);
     if ((int)ARG(2) == GWL_WNDPROC)
         for (i = 0; i < g_wndproc_count; i++)
             if ((u32)(uintptr_t)g_wndproc_thunks[i] == eax) { eax = g_wndproc_va[i]; break; }
@@ -779,7 +809,7 @@ static void bridge_SetActiveWindow(void) { eax = (u32)(uintptr_t)SetActiveWindow
 static void bridge_SetForegroundWindow(void) { eax = SetForegroundWindow((HWND)(uintptr_t)ARG(1)); esp += 4+4; }
 static void bridge_GetActiveWindow(void) { eax = (u32)(uintptr_t)GetActiveWindow();  esp += 4; }
 static void bridge_GetWindowPlacement(void) { eax = GetWindowPlacement((HWND)(uintptr_t)ARG(1),(WINDOWPLACEMENT*)VA2PTR(ARG(2))); esp += 4+8; }
-static void bridge_SetWindowPos(void) { eax = SetWindowPos((HWND)(uintptr_t)ARG(1),(HWND)(uintptr_t)ARG(2),(int)ARG(3),(int)ARG(4),(int)ARG(5),(int)ARG(6),ARG(7)); esp += 4+28; }
+static void bridge_SetWindowPos(void) { eax = OWNED(ARG(1)) ? 1 : SetWindowPos((HWND)(uintptr_t)ARG(1),(HWND)(uintptr_t)ARG(2),(int)ARG(3),(int)ARG(4),(int)ARG(5),(int)ARG(6),ARG(7)); esp += 4+28; }
 static void bridge_GetCursorPos(void) { eax = GetCursorPos((POINT*)VA2PTR(ARG(1))); esp += 4+4; }
 static void bridge_SetCursorPos(void) { eax = SetCursorPos((int)ARG(1),(int)ARG(2)); esp += 4+8; }
 

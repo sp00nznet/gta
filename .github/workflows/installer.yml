@@ -1,0 +1,21 @@
+# The installer for this commit (recomp-launcher with launcher/launcher.json):
+# artifacts on every push to main, release files on a v* tag. The game itself
+# is never in it: the installer builds from the player's own copy.
+name: installer
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  installer:
+    uses: sp00nznet/recomp-launcher/.github/workflows/installer.yml@v0.3.0
+    with:
+      launcher-ref: v0.3.0
+      name: GTA-Recomp-Installer
+      platforms: windows
