@@ -13,6 +13,21 @@ endif()
 find_package(SDL2 QUIET)
 find_package(OpenGL QUIET)
 
+# pcrecomp supplies the lifted code's CPU contract (runtime/recomp32/recomp_types.h).
+set(PCRECOMP_HOME "$ENV{PCRECOMP}" CACHE PATH "pcrecomp checkout")
+if(NOT PCRECOMP_HOME)
+    foreach(cand ../pcrecomp-gta ../pcrecomp)
+        if(EXISTS "${CMAKE_SOURCE_DIR}/${cand}/runtime/recomp32/recomp_types.h")
+            get_filename_component(PCRECOMP_HOME "${CMAKE_SOURCE_DIR}/${cand}" ABSOLUTE)
+            break()
+        endif()
+    endforeach()
+endif()
+if(NOT EXISTS "${PCRECOMP_HOME}/runtime/recomp32/recomp_types.h")
+    message(FATAL_ERROR "pcrecomp not found: set PCRECOMP to a checkout of https://github.com/sp00nznet/pcrecomp")
+endif()
+include_directories(BEFORE "${PCRECOMP_HOME}/runtime/recomp32")
+
 # --- Collect generated recompiled sources ---
 file(GLOB GTA1_RECOMP_SOURCES "src/recomp/gen/recomp_*.c")
 
@@ -21,8 +36,7 @@ if(NOT GTA1_RECOMP_SOURCES)
         "No lifted sources in src/recomp/gen/.\n"
         "The lifted C is generated from your own copy of the game, not shipped "
         "with this repository. Generate it first:\n"
-        "  python tools/run_pipeline.py \"<path to>/Grand Theft Auto.exe\" "
-        "--all --split 500 --functions-json config/functions_gta1.json\n"
+        "  python tools/lift.py \"<path to>/Grand Theft Auto.exe\"\n"
         "  python tools/soften_fatal.py")
 endif()
 

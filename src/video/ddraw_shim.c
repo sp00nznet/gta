@@ -105,13 +105,13 @@ static u32  g_palette_obj;
 static u32  g_clipper_obj;
 static HWND g_hwnd;
 
-#define MAX_SURFACES 8
+#define MAX_SURFACES 32   /* ponytail: never freed; the game makes ~10, a freelist if it ever recreates them per mode change */
 static struct {
     u32 obj;            /* VA of the COM object handed to the game */
     u32 bits;           /* VA of its 8bpp pixels */
     u32 w, h, caps, bpp;
     int is_primary;
-    int paired;         /* the surface this one flips with, or -1 */
+    int paired;         /* next surface in its flipping chain (the last back buffer's is the primary), or -1 */
 } g_surf[MAX_SURFACES];
 static int g_surf_count;
 
@@ -123,6 +123,7 @@ static PALETTEENTRY g_pal[256];
  * and presenting them as 16-bit gets both the size and the format wrong.
  */
 static u32 g_mode_bpp = SCREEN_BPP;
+static u32 g_mode_w = SCREEN_W, g_mode_h = SCREEN_H;   /* a primary is the display mode's size */
 static int g_dd_trace = -1;
 
 extern u32 g_bridge_hit;
@@ -420,8 +421,8 @@ static u32 make_object(int iface) {
 static u32 create_surface(u32 desc_va) {
     u32 flags = MEM32(desc_va + SD_FLAGS);
     u32 caps  = MEM32(desc_va + SD_CAPS);
-    u32 w     = (flags & DDSD_WIDTH)  ? MEM32(desc_va + SD_WIDTH)  : SCREEN_W;
-    u32 h     = (flags & DDSD_HEIGHT) ? MEM32(desc_va + SD_HEIGHT) : SCREEN_H;
+    u32 w     = (flags & DDSD_WIDTH)  ? MEM32(desc_va + SD_WIDTH)  : g_mode_w;
+    u32 h     = (flags & DDSD_HEIGHT) ? MEM32(desc_va + SD_HEIGHT) : g_mode_h;
     u32 back  = (flags & DDSD_BACKBUFFERCOUNT) ? MEM32(desc_va + SD_BACKCOUNT) : 0;
     int i;
 
@@ -444,20 +445,26 @@ static u32 create_surface(u32 desc_va) {
             w, h, caps, g_surf[i].is_primary ? " PRIMARY" : "",
             g_surf[i].obj, g_surf[i].bits);
 
-    /* A complex primary asks for its back buffer in the same call. */
-    if (back && g_surf_count < MAX_SURFACES) {
-        int b = g_surf_count++;
-        g_surf[b].obj        = make_object(IF_SURFACE);
-        g_surf[b].bpp        = g_mode_bpp;
-        g_surf[b].bits       = recomp_scratch_alloc(w * h * (g_mode_bpp / 8));
-        g_surf[b].w          = w;
-        g_surf[b].h          = h;
-        g_surf[b].caps       = DDSCAPS_BACKBUFFER;
-        g_surf[b].is_primary = 0;
-        g_surf[b].paired     = i;
-        g_surf[i].paired     = b;
-        fprintf(stderr, "  DDRAW:   + back buffer -> obj 0x%08X bits 0x%08X\n",
-                g_surf[b].obj, g_surf[b].bits);
+    /* A complex primary asks for its back buffers in the same call: a ring,
+     * primary -> back 1 -> ... -> back n -> primary. GTA's in-game renderer
+     * asks for two and walks the ring with EnumAttachedSurfaces. */
+    {
+        int prev = i;
+        while (back-- && g_surf_count < MAX_SURFACES) {
+            int b = g_surf_count++;
+            g_surf[b].obj        = make_object(IF_SURFACE);
+            g_surf[b].bpp        = g_mode_bpp;
+            g_surf[b].bits       = recomp_scratch_alloc(w * h * (g_mode_bpp / 8));
+            g_surf[b].w          = w;
+            g_surf[b].h          = h;
+            g_surf[b].caps       = DDSCAPS_BACKBUFFER;
+            g_surf[b].is_primary = 0;
+            g_surf[b].paired     = i;
+            g_surf[prev].paired  = b;
+            prev = b;
+            fprintf(stderr, "  DDRAW:   + back buffer -> obj 0x%08X bits 0x%08X\n",
+                    g_surf[b].obj, g_surf[b].bits);
+        }
     }
     return g_surf[i].obj;
 }
@@ -559,6 +566,7 @@ static void shim_dispatch(void) {
             break;
         case 21: /* SetDisplayMode(dwWidth, dwHeight, dwBPP) */
             if (ARG(4) == 8 || ARG(4) == 16 || ARG(4) == 32) g_mode_bpp = ARG(4);
+            if (ARG(2) && ARG(3)) { g_mode_w = ARG(2); g_mode_h = ARG(3); }
             fprintf(stderr, "  DDRAW: SetDisplayMode %ux%ux%u\n", ARG(2), ARG(3), ARG(4));
             break;
         default:
@@ -597,15 +605,35 @@ static void shim_dispatch(void) {
             if (g_surf[si].is_primary) present(si);
             break;
         }
+        case 9: { /* EnumAttachedSurfaces(lpContext, lpEnumSurfacesCallback)
+                   * The game's in-game renderer (sub_00491BF0) finds its back
+                   * buffer this way, through the callback at 0x491D30; with
+                   * the callback never called it had no buffer to draw into. */
+            int b = si >= 0 ? g_surf[si].paired : -1;
+            if (b >= 0 && g_surf[b].is_primary) b = -1;     /* the ring's end: nothing further attached */
+            if (b >= 0) {
+                static u32 desc;    /* scratch is a bump allocator: one desc, reused */
+                u32 args[3];
+                if (!desc) desc = recomp_scratch_alloc(SD_DESC_SIZE);
+                write_surface_desc(desc, g_surf[b].w, g_surf[b].h, g_surf[b].bits,
+                                   g_surf[b].caps, g_surf[b].bpp);
+                args[0] = g_surf[b].obj; args[1] = desc; args[2] = ARG(2);
+                call_game(ARG(3), args, 3);
+            }
+            break;
+        }
         case 11: /* Flip(lpDDSurfaceTargetOverride, dwFlags) */
             if (si >= 0) {
-                int b = g_surf[si].paired;
-                present(b >= 0 ? b : si);
-                if (b >= 0) {          /* swap buffers, as a real flip does */
-                    u32 t = g_surf[si].bits;
-                    g_surf[si].bits = g_surf[b].bits;
-                    g_surf[b].bits  = t;
+                /* Rotate the ring's bits: the front takes back 1's, each back
+                 * the next one's, the last back the old front's. */
+                int b = si;
+                u32 t = g_surf[si].bits;
+                while (g_surf[b].paired >= 0 && g_surf[b].paired != si) {
+                    g_surf[b].bits = g_surf[g_surf[b].paired].bits;
+                    b = g_surf[b].paired;
                 }
+                g_surf[b].bits = t;
+                present(si);
             }
             break;
         case 12: /* GetAttachedSurface(lpDDSCaps, lplpDDAttachedSurface) */

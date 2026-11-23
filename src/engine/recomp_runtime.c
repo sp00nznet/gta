@@ -43,7 +43,7 @@ ptrdiff_t g_mem_base = 0;      /* fixed-base mapping: VA == host address */
 uint32_t  g_fs_base  = 0;
 uint32_t  g_gs_base  = 0;
 
-uint32_t g_icall_trace[ICALL_TRACE_SIZE];
+uint32_t g_icall_trace[ICALL_TRACE_SIZE], g_icall_from[ICALL_TRACE_SIZE];
 uint32_t g_icall_trace_idx;
 uint32_t g_icall_count;
 uint32_t g_cur_func;
@@ -160,7 +160,7 @@ void recomp_trace_enter(uint32_t va) {
 #define GTA_STACK_SIZE   0x00100000u
 /* Objects, vtables and the DirectDraw surfaces the shim hands the game all
  * live here, so it needs room for a few 640x480 buffers. */
-#define GTA_SCRATCH_SIZE 0x00400000u
+#define GTA_SCRATCH_SIZE 0x01000000u   /* 16 MB: in-game asks for a primary and 7 back buffers */
 
 static void *g_tib_view, *g_stack_view, *g_scratch_view;
 static uint32_t g_stack_base, g_scratch_base, g_scratch_next;
@@ -427,4 +427,15 @@ void recomp_shutdown(void) {
     if (g_stack_view)   VirtualFree(g_stack_view, 0, MEM_RELEASE);
     if (g_tib_view)     VirtualFree(g_tib_view, 0, MEM_RELEASE);
 #endif
+}
+
+/* Guest EH frames (recomp_types.h RECOMP_EH_FRAME): the CRT startup installs
+ * one around WinMain. ponytail: the frames are only tracked, nothing unwinds
+ * to them -- GTA is C and never raises; pcrecomp runtime/native32/eh32.c is
+ * the full dispatcher if a guest exception ever has to be caught. */
+static recomp_ehframe_t* s_eh_frames;
+void recomp_eh_push(recomp_ehframe_t* f) { f->prev = s_eh_frames; s_eh_frames = f; }
+void recomp_eh_pop(recomp_ehframe_t* f) {
+    for (recomp_ehframe_t* p = s_eh_frames; p; p = p->prev)
+        if (p == f) { s_eh_frames = f->prev; return; }
 }

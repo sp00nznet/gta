@@ -451,6 +451,8 @@ static void bridge_MessageBoxA(void) {
  *   GTA_KEYS=0x0D,0x28,0x0D   virtual-key codes, sent in order
  *   GTA_KEY_MS=2000           milliseconds between them (default 2000)
  *   GTA_KEY_DELAY_MS=3000     wait before the first one (default 3000)
+ *   VK*MS                     hold the key MS milliseconds (repeats keydown every 50 ms)
+ *   +MS                       no key, just wait MS milliseconds
  *
  * Posted rather than synthesised with SendInput so it lands in the game's own
  * queue whether or not the window has focus.
@@ -608,14 +610,24 @@ static DWORD WINAPI key_thread(LPVOID arg) {
             wait_for_state((u32)strtoul(p, NULL, 0));
             p = colon + 1;
         }
+        if (*p == '+') { Sleep((DWORD)strtoul(p + 1, NULL, 0)); continue; }
+        char *star = strchr(p, '*');
+        DWORD hold = star ? (DWORD)strtoul(star + 1, NULL, 0) : 40, held;
         vk = (UINT)strtoul(p, NULL, 0);
         UINT sc = MapVirtualKeyA(vk, 0 /* MAPVK_VK_TO_VSC */);
         LPARAM down = (LPARAM)(1 | (sc << 16));
-        LPARAM up   = down | 0xC0000000;
+        LPARAM up;
+        if ((vk >= VK_PRIOR && vk <= VK_DOWN) || vk == VK_INSERT || vk == VK_DELETE)
+            down |= 1 << 24;                     /* extended: the arrows, not the keypad */
+        up = down | 0xC0000000;
         if (!vk || !g_game_hwnd) continue;
-        fprintf(stderr, "  KEYS: vk=0x%02X (state %u)\n", vk, MEM32(g_key_state_va));
+        fprintf(stderr, "  KEYS: vk=0x%02X hold %lu ms (state %u)\n", vk, hold, MEM32(g_key_state_va));
         PostMessageA(g_game_hwnd, WM_KEYDOWN, vk, down);
-        Sleep(40);
+        for (held = 0; held + 50 < hold; held += 50) {
+            Sleep(50);
+            PostMessageA(g_game_hwnd, WM_KEYDOWN, vk, down | 0x40000000);   /* auto-repeat */
+        }
+        Sleep(hold - held);
         PostMessageA(g_game_hwnd, WM_KEYUP, vk, up);
         Sleep(gap);
     }
@@ -800,11 +812,14 @@ static void bridge_SetStretchBltMode(void) { eax = SetStretchBltMode((HDC)(uintp
 static const char *k_fake_keys[] = { GTA_REG_ROOT, GTA_REG_CONTROLS };
 #define NUM_FAKE_KEYS ((int)(sizeof(k_fake_keys) / sizeof(k_fake_keys[0])))
 
-/* Defaults the game will accept. Language 0 is English; the control bindings
- * are left at 0 -- GTA Settings.exe is what normally populates them, and the
- * game only requires the reads to succeed. */
+/* Language 0 is English. The bindings are scan codes (0x80 set = extended
+ * key), the "Default Keys" preset of GTA Settings.exe -- its table at
+ * 0x404768, in its slot order: turn left, turn right, forwards, backwards,
+ * brake, enter/exit vehicle, attack, next weapon, previous weapon, special.
+ * Answering 0 for all ten (as this used to) leaves every in-game action
+ * unbound: the front end works, and on the street nothing moves. */
 static u32 g_reg_language;
-static u32 g_reg_controls[10];
+static u32 g_reg_controls[10] = { 0xCB, 0xCD, 0xC8, 0xD0, 0x39, 0x1C, 0x1D, 0x2D, 0x2C, 0x0F };
 
 static int fake_key_index(u32 hkey) {
     u32 i = hkey - FAKE_HKEY_BASE;
@@ -912,11 +927,74 @@ static void bridge_AIL_mem_free_lock(void) { AIL_mem_free_lock(VA2PTR(ARG(1))); 
 static void bridge_AIL_waveOutOpen(void) { eax=AIL_waveOutOpen(VA2PTR(ARG(1)),(void*)(uintptr_t)ARG(2),(s32)ARG(3),ARG(4)?VA2PTR(ARG(4)):NULL); esp += 4+16; }
 static void bridge_AIL_waveOutClose(void) { esp += 4+4; }
 static void bridge_AIL_digital_configuration(void) { eax=0; esp += 4+16; }
-static void bridge_AIL_register_timer(void) { eax=(u32)(uintptr_t)AIL_register_timer(NULL); esp += 4+4; }
-static void bridge_AIL_release_timer_handle(void) { AIL_release_timer_handle((HTIMER)(uintptr_t)ARG(1)); esp += 4+4; }
-static void bridge_AIL_set_timer_frequency(void) { esp += 4+8; }
-static void bridge_AIL_start_timer(void) { AIL_start_timer((HTIMER)(uintptr_t)ARG(1)); esp += 4+4; }
-static void bridge_AIL_stop_timer(void) { AIL_stop_timer((HTIMER)(uintptr_t)ARG(1)); esp += 4+4; }
+/* Miles timers. The game registers a guest callback and polls what it does
+ * from a loop that makes no calls (sub_0047DC80, the frame limiter, spins on
+ * `cmp [0x775580], eax / jb`), so the tick has to land from another thread,
+ * as it did under real Miles. Lifted code cannot run on a second thread (the
+ * registers are globals), but GTA's callback (0x47DC70) is the whole of
+ * `mov eax,[g] / inc eax / mov [g],eax / ret 4`: the host thread does that
+ * increment itself. ponytail: only that shape is served; any other callback
+ * is reported and never fires -- deliver it on the game thread if one shows up. */
+#define MAX_GTIMERS 4
+static struct { u32 cb, counter, hz, running; } g_gt[MAX_GTIMERS];
+static HANDLE g_gt_thread;
+
+static DWORD WINAPI gt_thread(LPVOID unused) {
+    LARGE_INTEGER f, now;
+    double next[MAX_GTIMERS] = {0};
+    (void)unused;
+    QueryPerformanceFrequency(&f);
+    timeBeginPeriod(1);
+    for (;;) {
+        int i;
+        QueryPerformanceCounter(&now);
+        for (i = 0; i < MAX_GTIMERS; i++) {
+            double t = (double)now.QuadPart / (double)f.QuadPart, period;
+            if (!g_gt[i].running || !g_gt[i].counter) { next[i] = 0; continue; }
+            period = 1.0 / (g_gt[i].hz ? g_gt[i].hz : 100);
+            if (!next[i]) next[i] = t + period;
+            while (t >= next[i]) {
+                InterlockedIncrement((volatile LONG *)VA2PTR(g_gt[i].counter));
+                next[i] += period;
+            }
+        }
+        Sleep(1);
+    }
+}
+
+/* The global a `mov eax,[g] / inc eax / mov [g],eax / ret` callback bumps, or 0. */
+static u32 timer_counter(u32 cb) {
+    if (MEM8(cb) != 0xA1 || MEM8(cb + 5) != 0x40 || MEM8(cb + 6) != 0xA3) return 0;
+    if (MEM32(cb + 1) != MEM32(cb + 7)) return 0;
+    if (MEM8(cb + 11) != 0xC3 && MEM8(cb + 11) != 0xC2) return 0;
+    return MEM32(cb + 1);
+}
+
+static void bridge_AIL_register_timer(void) {
+    int i;
+    eax = (u32)-1;
+    for (i = 0; i < MAX_GTIMERS; i++) if (!g_gt[i].cb) {
+        g_gt[i].cb = ARG(1);
+        g_gt[i].counter = timer_counter(ARG(1));
+        g_gt[i].hz = 100;
+        if (!g_gt[i].counter)
+            fprintf(stderr, "  MSS: timer callback 0x%08X is not a counter; it will not fire\n", ARG(1));
+        eax = (u32)i;
+        break;
+    }
+    esp += 4+4;
+}
+static int gt_ok(u32 h) { return h < MAX_GTIMERS && g_gt[h].cb; }
+static void bridge_AIL_release_timer_handle(void) { if (gt_ok(ARG(1))) memset(&g_gt[ARG(1)], 0, sizeof(g_gt[0])); esp += 4+4; }
+static void bridge_AIL_set_timer_frequency(void) { if (gt_ok(ARG(1))) g_gt[ARG(1)].hz = ARG(2); esp += 4+8; }
+static void bridge_AIL_start_timer(void) {
+    if (gt_ok(ARG(1))) {
+        g_gt[ARG(1)].running = 1;
+        if (!g_gt_thread) g_gt_thread = CreateThread(NULL, 0, gt_thread, NULL, 0, NULL);
+    }
+    esp += 4+4;
+}
+static void bridge_AIL_stop_timer(void) { if (gt_ok(ARG(1))) g_gt[ARG(1)].running = 0; esp += 4+4; }
 static void bridge_AIL_set_preference(void) { esp += 4+8; }
 static void bridge_AIL_set_stream_position(void) { esp += 4+8; }
 static void bridge_AIL_service_stream(void) { esp += 4+8; }
