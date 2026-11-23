@@ -123,6 +123,6 @@ not run, since lifted code cannot run on a second thread.
 **Rendering path.** Frames reach the screen through `StretchDIBits`, not the
 OpenGL renderer the project is aiming at. Correct, and not fast.
 
-**GTA2** is TAC-packed (The Anti-Cracker) in every available version, including
-the official Rockstar freeware release. It needs a runtime dump or a dedicated
-unpacker before any of this applies to it.
+**GTA2** is wrapped by TAC. pcrecomp's `emu_unpack.py` (branch `gta`) now
+unwraps it by emulating the wrapper in Unicorn, without running it; the game
+and its two renderer DLLs lift with 0 errors. It is its own project.
