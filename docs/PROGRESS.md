@@ -106,6 +106,12 @@ in the middle of another instruction (0x401921 is inside the `mov` at
 
 ## Known gaps
 
+**London's music is CD audio.** London plays its soundtrack from the disc
+through Miles' Redbook calls (`AIL_redbook_open`, `_set_volume`), which the
+shim answers as "no CD tracks". The rip used here carries no audio tracks, so
+there is nothing to play; with a disc image's tracks as files, Redbook could be
+served from them the way GTA1's WAV streams are.
+
 **DirectDraw surfaces are never freed.** The shim's surface table and its
 scratch memory are bump-allocated: fine for one game and back to the menu, not
 for many. A freelist when it matters.
