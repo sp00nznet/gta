@@ -42,7 +42,8 @@ host needs win32hle's pieces from sp00nznet/pcrecomp PR #200 there.
 ## Building
 
 Prerequisites: Xcode's command line tools, Homebrew's `cmake ninja pkgconf
-sdl2 sdl2_ttf`, Python 3 with `capstone` and `pefile`, a pcrecomp checkout
+sdl2 sdl2_ttf ffmpeg` (ffmpeg plays GTA2's Bink movies; `CMAKE_ARGS=-DWITH_FFMPEG=OFF`
+builds without them), Python 3 with `capstone` and `pefile`, a pcrecomp checkout
 beside this repository, and your own copy of the game (the folder holding
 `WINO` and `GTADATA`).
 
@@ -70,6 +71,8 @@ build-macos/bin/gta1 --run --fullscreen    # borderless
 | `--join 192.168.1.20` | where a network game's host is |
 | `--port 2350` | where a network game's host listens |
 | `--classic` | the original 640x480, no remaster |
+| `--pacing frame` | how frames reach the screen: `frame` (the default) on the game's frame boundary, `even` at the flip, `all` every write |
+| `--game DIR` | the game's install root, the folder with `WINO` and `GTADATA` (default `./game`) |
 
 In the game: F10 settings (fn+F10, or Cmd+M on a Mac keyboard), F11
 fullscreen, F12 scaling. The settings are remembered in `gta-macos.ini`

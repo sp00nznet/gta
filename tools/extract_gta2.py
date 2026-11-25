@@ -9,12 +9,12 @@ stored files, each one: its name, its path, a version and its size in
 decimal ASCII, every one NUL-terminated, then the bytes. Those files are an
 ordinary InstallShield setup (Disk1/data1.cab and friends), which
 pcrecomp's tools/assets/isextract.py opens -- the same as GTA1's on Windows.
-The setup's files go to <out>/payload, the game's to <out>.
+The setup's files go to <out>/payload while it runs, the game's to <out>.
 
 PCRECOMP points at a pcrecomp checkout (default ../pcrecomp-gta, then
 ../pcrecomp, as tools/lift.py looks).
 """
-import argparse, os, subprocess, sys
+import argparse, os, shutil, subprocess, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -41,12 +41,12 @@ def walk_manifest(data, off):
             size = int(size_s)
         except (ValueError, UnicodeDecodeError):
             break
-        if not name or not path or size <= 0 or o + size > end:
+        if not name or not path or size < 0 or o + size > end:
             break
         rel = path.replace("\\", "/")
         parts = rel.split("/")
-        if not rel.startswith("/") and ":" not in parts[0] and ".." not in parts:
-            out.append((rel, data[o:o + size]))
+        if not rel.startswith("/") and not rel.endswith("/") and ":" not in parts[0] and ".." not in parts:
+            out.append((rel, data[o:o + size]))         # an empty file too; a folder entry is skipped
         off = o + size
     return out
 
@@ -93,6 +93,7 @@ def main():
         sys.exit("isextract.py failed on %s" % cab)
     if not any(f.lower() == "gta2.exe" for f in os.listdir(a.out)):
         sys.exit("extracted, but no gta2.exe in %s" % a.out)
+    shutil.rmtree(payload)                             # the installer's own files: GTA2.exe still has them
     print("GTA2 extracted to %s" % a.out)
 
 

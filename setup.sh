@@ -24,8 +24,10 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --force) FORCE=1 ;;
     --yes) YES=1 ;;
-    --game-dir) GAME_ARG=$2; shift ;;
-    --targets) TARGETS=$2; shift ;;
+    --game-dir|--targets)
+      [ $# -ge 2 ] || { echo "usage: ./setup.sh [--game-dir DIR] [--targets gta2] [--yes] [--force]: $1 needs a value" >&2; exit 2; }
+      if [ "$1" = --game-dir ]; then GAME_ARG=$2; else TARGETS=$2; fi
+      shift ;;
     *) echo "usage: ./setup.sh [--game-dir DIR] [--targets gta2] [--yes] [--force]" >&2; exit 2 ;;
   esac
   shift
@@ -68,6 +70,20 @@ ask()  { [ "$YES" = 1 ] && { say "$1 yes (--yes)"; return 0; }; read -r -p "$1 [
 # A command's output into the log; its failure stops the setup.
 run()  { say "  $1..."; local what=$1; shift; "$@" >> "$LOG" 2>&1 || fail "$what failed (exit code $?)."; }
 fresh() { [ "$FORCE" = 1 ] || [ ! -e "$1" ]; }   # this step's output is missing (or --force)
+# real: a path with its links resolved, existing or not (its folder is made).
+real() { mkdir -p "$(dirname "$1")" && printf '%s/%s' "$(cd "$(dirname "$1")" && pwd -P)" "$(basename "$1")"; }
+# replacing: the folder $2 is about to be remade from what is in $1. The source
+# inside it (--force with the game folder pointing at the build's own copy)
+# would be deleted before it is read; with "copy", the copy inside the source
+# would copy itself into itself.
+replacing() {
+  local src dst; src=$(cd "$1" 2>/dev/null && pwd -P || printf '%s' "$1"); dst=$(real "$2")
+  case "$src/" in "$dst/"*) fail "the game folder $1 is inside this build's own copy ($2): choose the original folder." ;; esac
+  if [ "$3" = copy ]; then
+    case "$dst/" in "$src/"*) fail "this build's copy ($2) would be inside the game folder $1: build somewhere else." ;; esac
+  fi
+  rm -rf "$2"; mkdir -p "$2"
+}
 
 say "Grand Theft Auto: static recompilation setup (macOS)"
 [ "$(uname)" = Darwin ] || fail "this is the macOS setup; on Windows run Setup.cmd."
@@ -115,7 +131,7 @@ else
   [ -z "$installed" ] && [ -d "$g" ] && installed=$(first "$g" 3 -ipath '*/WINO/Grand Theft Auto.exe' | sed 's|/[^/]*/[^/]*$||')
   if [ -n "$installed" ]; then
     say "  Copying the installed game from $installed"
-    rm -rf "$GAME"; mkdir -p "$GAME"
+    replacing "$installed" "$GAME" copy
     run "Copying" cp -R "$installed/." "$GAME/"
   else
     zip=""
@@ -124,13 +140,15 @@ else
     cabs=$g
     if [ -n "$zip" ]; then
       cabs=$ROOT/game/installer
-      rm -rf "$cabs"; mkdir -p "$cabs"
+      replacing "$(dirname "$zip")" "$cabs"
       run "Unzipping $zip" unzip -q -o "$zip" -d "$cabs"
     fi
     cab=$(first "$cabs" 3 -iname data1.cab)
     [ -n "$cab" ] || fail "no GTA1 found in $g: choose GTAINSTALLER.zip, a folder with data1.cab, or an installed copy."
     hdr=$(first "$(dirname "$cab")" 1 -iname data1.hdr)
+    replacing "$cabs" "$GAME"
     run "Extracting the installer's cabinets" "$PY" "$PCRECOMP/tools/assets/isextract.py" "${hdr:-$cab}" "$cab" -o "$GAME"
+    rm -rf "$ROOT/game/installer"                 # the unzipped installer: the zip still has it
   fi
   [ -f "$EXE" ] || fail "the extracted game has no WINO/Grand Theft Auto.exe."
   touch "$GAME/.extracted"                        # complete: a cancelled copy is redone
@@ -149,10 +167,11 @@ if [ "$GTA2" = 1 ]; then
   if ! fresh "$GTA2_DIR/.extracted"; then
     say "  Already extracted in gta2-game/extracted (skipping)."
   else
-    rm -rf "$GTA2_DIR"; mkdir -p "$GTA2_DIR"
     if [ -n "$GTA2_INSTALLED" ]; then
+      replacing "$GTA2_INSTALLED" "$GTA2_DIR" copy
       run "Copying the installed GTA2 from $GTA2_INSTALLED" cp -R "$GTA2_INSTALLED/." "$GTA2_DIR/"
     elif [ -n "$GTA2_FROM" ]; then
+      replacing "$(dirname "$GTA2_FROM")" "$GTA2_DIR"
       run "Extracting $GTA2_FROM" "$PY" tools/extract_gta2.py "$GTA2_FROM" -o "$GTA2_DIR"
     else
       fail "GTA2 was built here before but its extracted copy is gone: put GTA2.exe in the game folder."

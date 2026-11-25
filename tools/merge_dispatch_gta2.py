@@ -34,18 +34,24 @@ for _, rows in inc:
             sys.exit("not in address order: 0x%08X after 0x%08X" % (va, prev))
         prev = va
 
-with open(OUT, "w", newline="\n") as f:
-    f.write("/* The merged dispatch table (tools/merge_dispatch_gta2.py): the exe's\n"
-            " * lift, then dmavideo.dll's, in address order. The per-module\n"
-            " * recomp_dispatch.c are data for this merge and are not compiled.\n"
-            " * Civilisation III's Linux host is the pattern (src/linux/dispatch.c). */\n"
-            '#include "recomp_types.h"\n')
-    for gen, _ in inc:
-        f.write('#include "../recomp/%s/recomp_funcs.h"\n' % gen.split("recomp/")[-1])
-    f.write("\nconst recomp_dispatch_entry_t recomp_dispatch_table[] = {\n")
-    for gen, rows in inc:
-        f.write("    /* %s */\n" % gen)
-        for va, fn in rows:
-            f.write("    { 0x%su, %s },\n" % (va.upper().ljust(8), fn))
-    f.write("};\nconst uint32_t recomp_dispatch_count = sizeof recomp_dispatch_table / sizeof *recomp_dispatch_table;\n")
-print("wrote %s (%d rows)" % (OUT, prev and sum(len(r) for _, r in inc)))
+lines = ["/* The merged dispatch table (tools/merge_dispatch_gta2.py): the exe's\n"
+         " * lift, then dmavideo.dll's, in address order. The per-module\n"
+         " * recomp_dispatch.c are data for this merge and are not compiled.\n"
+         " * Civilisation III's Linux host is the pattern (src/linux/dispatch.c). */\n"
+         '#include "recomp_types.h"\n']
+for gen, _ in inc:
+    lines.append('#include "../recomp/%s/recomp_funcs.h"\n' % gen.split("recomp/")[-1])
+lines.append("\nconst recomp_dispatch_entry_t recomp_dispatch_table[] = {\n")
+for gen, rows in inc:
+    lines.append("    /* %s */\n" % gen)
+    for va, fn in rows:
+        lines.append("    { 0x%su, %s },\n" % (va.upper().ljust(8), fn))
+lines.append("};\nconst uint32_t recomp_dispatch_count = sizeof recomp_dispatch_table / sizeof *recomp_dispatch_table;\n")
+text = "".join(lines)
+# Written only when it changes: the table is tracked, and rewriting the same
+# bytes showed it modified and relinked gta2 on every setup run.
+old = open(OUT, newline="").read() if os.path.exists(OUT) else None
+if old != text:
+    with open(OUT, "w", newline="\n") as f:
+        f.write(text)
+print("%s %s (%d rows)" % ("wrote" if old != text else "unchanged:", OUT, prev and sum(len(r) for _, r in inc)))

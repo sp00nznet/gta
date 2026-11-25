@@ -25,6 +25,14 @@ class WalkManifest(unittest.TestCase):
         blob = entry(b"a.txt", b"a.txt", b"abc") + b"b\0b\0" + b"1\0" + b"999\0" + b"xyz"
         self.assertEqual(walk_manifest(blob, 0), [("a.txt", b"abc")])
 
+    def test_empty_file_kept_and_walk_goes_on(self):
+        blob = entry(b"e", b"Disk1\\empty.txt", b"") + entry(b"a", b"Disk1\\a.txt", b"abc")
+        self.assertEqual(walk_manifest(blob, 0), [("Disk1/empty.txt", b""), ("Disk1/a.txt", b"abc")])
+
+    def test_directory_entry_skipped(self):
+        blob = entry(b"d", b"Disk1\\sub\\", b"") + entry(b"a", b"Disk1\\a.txt", b"abc")
+        self.assertEqual(walk_manifest(blob, 0), [("Disk1/a.txt", b"abc")])
+
     def test_path_cannot_climb_out(self):
         blob = entry(b"evil", b"..\\..\\evil", b"x") + entry(b"ok", b"Disk1\\ok", b"y")
         self.assertEqual(walk_manifest(blob, 0), [("Disk1/ok", b"y")])
