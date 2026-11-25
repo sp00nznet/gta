@@ -14,6 +14,29 @@ address. The drive32 lift takes the fast register model
 (`RECOMP_LOCAL_REGS`, indirect-call caches, the x87 ring) redalert2-recomp's
 native hosts use.
 
+## The installer
+
+recomp-launcher, as on Windows (`launcher/launcher.json`): the player opens
+`GTA-Recomp-Installer.app`, chooses the folder holding Rockstar's freeware
+`GTAINSTALLER.zip` (or its `data1.cab`, or an installed copy), ticks **Also
+GTA2** if its `GTA2.exe` is in the same folder, and **Build**; then **Play**.
+It runs `setup.sh`, which is also the way by hand:
+
+```
+./setup.sh --game-dir ~/Downloads/GTA                  # GTA1
+./setup.sh --game-dir ~/Downloads/GTA --targets gta2   # and GTA2
+```
+
+It needs Xcode's command line tools and Homebrew, and installs CMake, Ninja,
+SDL2, SDL2_ttf, ffmpeg and uv with brew (asking first, unless `--yes`), and
+capstone and pefile in a `.venv`. Then it extracts, lifts, patches, builds,
+and leaves `Grand Theft Auto (recomp).command` and `GTA2 (recomp).command`
+here. Finished steps are skipped (`--force` redoes them); the log is
+`setup.log`. GTA2's installer is opened by `tools/extract_gta2.py`.
+
+The installer fetches pcrecomp at the ref `launcher.json` names; the macOS
+host needs win32hle's pieces from sp00nznet/pcrecomp PR #200 there.
+
 ## Building
 
 Prerequisites: Xcode's command line tools, Homebrew's `cmake ninja pkgconf

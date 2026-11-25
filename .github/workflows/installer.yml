@@ -14,8 +14,8 @@ permissions:
 
 jobs:
   installer:
-    uses: sp00nznet/recomp-launcher/.github/workflows/installer.yml@v0.3.0
+    uses: sp00nznet/recomp-launcher/.github/workflows/installer.yml@v0.7.0
     with:
-      launcher-ref: v0.3.0
+      launcher-ref: v0.7.0
       name: GTA-Recomp-Installer
-      platforms: windows
+      platforms: windows macos
