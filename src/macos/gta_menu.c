@@ -119,6 +119,9 @@ static void save_all(void) {
 
 static void menu_open(void);
 
+/* The DualSense touchpad opens it (gta_pad.c), as F10 does. */
+void gta_menu_open(void) { menu_open(); }
+
 static void menu_chosen(int id) {
     if (id >= ID_SCALE_BASE) {                        /* scaling: at once, as F12 does */
         int k = id - ID_SCALE_BASE;

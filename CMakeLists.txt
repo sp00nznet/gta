@@ -49,6 +49,13 @@ if(APPLE)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
     pkg_check_modules(SDL2_TTF REQUIRED IMPORTED_TARGET SDL2_ttf)
+    # The Bink movies (win32hle's bink.c, on ffmpeg): the intro and cutscenes
+    # actually play. WITH_FFMPEG=OFF builds without it, and bink.c stubs the
+    # player out.
+    option(WITH_FFMPEG "Play Bink movies via ffmpeg" ON)
+    if(WITH_FFMPEG)
+        pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil libswresample)
+    endif()
     set(HLE "${PCRECOMP_HOME}/runtime/win32hle")
     file(GLOB HLE_SOURCES CONFIGURE_DEPENDS "${HLE}/*.c")
     list(FILTER HLE_SOURCES EXCLUDE REGEX "_selftest\\.c$|/[.]_[^/]*$")
@@ -89,6 +96,51 @@ if(APPLE)
     set_target_properties(gta1 PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
         OUTPUT_NAME gta1)
+
+    # --- GTA2, native macOS: the freeware gta2.exe on the same win32hle ---
+    # Its own lift (src/recomp/gen_gta2, tools/lift.py without patch_gen:
+    # GTA1's patches are by GTA1 address), with dmavideo.dll -- the game's
+    # video layer, its 22 Vid_* exports -- lifted beside it and merged into
+    # one dispatch (tools/merge_dispatch_gta2.py, Civilization III's
+    # pattern). Bink cutscenes play through win32hle's bink.c; Miles through
+    # gta_mss.c's shared answers; DirectPlay through gta_net.c; DirectInput8
+    # through win32hle's dinput (the 8 on the 2-compatible slots).
+    file(GLOB GTA2_RECOMP_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/recomp/gen_gta2/*.c")
+    file(GLOB DMAVIDEO_RECOMP_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/recomp/gen_dmavideo/*.c")
+    file(GLOB D3DDLL_RECOMP_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/recomp/gen_d3ddll/*.c")
+    list(FILTER GTA2_RECOMP_SOURCES EXCLUDE REGEX "recomp_part\\.c$|recomp_dispatch\\.c$|/[.]_[^/]*$")
+    list(FILTER DMAVIDEO_RECOMP_SOURCES EXCLUDE REGEX "recomp_part\\.c$|recomp_dispatch\\.c$|/[.]_[^/]*$")
+    list(FILTER D3DDLL_RECOMP_SOURCES EXCLUDE REGEX "recomp_part\\.c$|recomp_dispatch\\.c$|/[.]_[^/]*$")
+    if(GTA2_RECOMP_SOURCES)
+        add_executable(gta2
+            src/macos/gta2_main.c
+            src/macos/gta2_dispatch.c
+            src/macos/gta_hooks.c
+            src/macos/gta_mixer.c
+            src/macos/gta_mss.c
+            src/macos/gta_net.c
+            ${HLE_SOURCES}
+            ${GTA2_RECOMP_SOURCES}
+            ${DMAVIDEO_RECOMP_SOURCES}
+            ${D3DDLL_RECOMP_SOURCES})
+        target_include_directories(gta2 PRIVATE src/macos src/remaster ${HLE})
+        target_compile_definitions(gta2 PRIVATE
+            RECOMP_RETADDR=0u
+            RECOMP_MEM_BASE=0x100000000000ull
+            RECOMP_LOCAL_REGS
+            RECOMP_TRACE)
+        set_source_files_properties(${GTA2_RECOMP_SOURCES} PROPERTIES
+            COMPILE_OPTIONS "-O2;-w;-fno-strict-aliasing;-fwrapv")
+        target_compile_options(gta2 PRIVATE -fno-strict-aliasing -fwrapv)
+        if(WITH_FFMPEG)
+            target_compile_definitions(gta2 PRIVATE HLE_WITH_FFMPEG)
+            target_link_libraries(gta2 PRIVATE PkgConfig::FFMPEG)
+        endif()
+        target_link_libraries(gta2 PRIVATE PkgConfig::SDL2 PkgConfig::SDL2_TTF pthread m)
+        set_target_properties(gta2 PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+            OUTPUT_NAME gta2)
+    endif()
     return()
 endif()
 

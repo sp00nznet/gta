@@ -619,14 +619,15 @@ static void x_DirectPlayCreate(void) {
     RET(DP_OK, 3);
 }
 
-/* DirectPlayEnumerateA(cb, ctx) -- ordinal 2.
+/* DirectPlayEnumerateA(cb, ctx) -- ordinal 2 (GTA2 imports it as ordinal 5;
+ * gta2_main.c answers 5 with this one).
  *
  * Enumerating is not optional, even for a single-player game. GTA1's front end
  * counts the service providers the callback reports, and the count gates
  * everything downstream: with none, state 0 never routed to state 15 or 16,
  * so states 5 and 3 -- the two that promote the audio mode -- were
  * unreachable, and the play state span forever. One provider is reported. */
-static void x_DirectPlayEnumerateA(void) {
+void x_DirectPlayEnumerateA(void) {
     static u32 guid_va, name_va;
     u32 cb = A32(0), ctx = A32(1), args[5];
     if (!guid_va) {
