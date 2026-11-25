@@ -5,16 +5,17 @@
 # freeware installer, lifts, patches, builds, and leaves a "Grand Theft Auto
 # (recomp)" launcher here -- and, with GTA2 ticked, "GTA2 (recomp)" too.
 #
-#   ./setup.sh --game-dir ~/Downloads/GTA           # GTA1
-#   ./setup.sh --game-dir ~/Downloads/GTA --targets gta2   # and GTA2
+#   ./setup.sh --game-dir ~/Downloads/GTA   # GTA1, and GTA2 if its GTA2.exe is there
+#   ./setup.sh --targets gta2 ...           # GTA2 required: stop if it is not found
 #   ./setup.sh --yes     # install what is missing without asking
 #   ./setup.sh --force   # redo every step
 #
 # --game-dir is GTAINSTALLER.zip, a folder holding it or its data1.cab, or
 # an installed copy (the folder with WINO/Grand Theft Auto.exe and
-# GTADATA). For GTA2, Rockstar's GTA2.exe installer (or an installed
-# gta2.exe) in that folder or one inside it. Finished steps are skipped;
-# everything goes to setup.log. recomp-launcher runs it with --yes.
+# GTADATA). GTA2 is built too when Rockstar's GTA2.exe installer (or an
+# installed gta2.exe) is in that folder or one inside it, or was built
+# before. Finished steps are skipped; everything goes to setup.log.
+# recomp-launcher runs it with --yes.
 set -e
 cd "$(dirname "$0")"
 ROOT=$PWD
@@ -29,11 +30,32 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-GTA2=0; case ",$TARGETS," in *,gta2,*) GTA2=1 ;; esac
 LOG=$ROOT/setup.log
 printf '==== setup %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" >> "$LOG"
+# first: a file the pattern names under a folder (a folder find cannot read,
+# an external disk's .Trashes, say, must not end the setup).
+first() { find "$1" -maxdepth "$2" "${@:3}" 2>/dev/null | head -n 1; }
 
-STEP=0; STEPS=$((6 + 2 * GTA2))
+# GTA2: built when its installer or an installed copy is in the game folder,
+# or it was built here before (its patches and dispatch then stay current);
+# --targets gta2 requires it.
+GTA2_DIR=$ROOT/gta2-game/extracted
+GTA2_FROM=""; GTA2_INSTALLED=""
+if [ -n "$GAME_ARG" ]; then
+  from=${GAME_ARG%/}; [ -d "$from" ] || from=$(dirname "$from")
+  while IFS= read -r f; do
+    d=$(dirname "$f")
+    if [ -d "$d/data" ] && [ -f "$d/d3ddll.dll" ]; then GTA2_INSTALLED=$d; break; fi
+    [ -z "$GTA2_FROM" ] && GTA2_FROM=$f
+  done < <(find "$from" -maxdepth 3 -iname gta2.exe 2>/dev/null)
+fi
+GTA2=0
+{ [ -n "$GTA2_FROM$GTA2_INSTALLED" ] || [ -e "$GTA2_DIR/.extracted" ]; } && GTA2=1
+case ",$TARGETS," in
+  *,gta2,*) [ "$GTA2" = 1 ] || GTA2=required ;;
+esac
+
+STEP=0; STEPS=6; [ "$GTA2" = 0 ] || STEPS=8
 say()  { printf '%s\n' "$*"; printf '%s\n' "$*" >> "$LOG"; }
 # "[n/N] what": the installer's progress bar reads these, as Setup.cmd's.
 step() { STEP=$((STEP + 1)); printf '\n\033[36m[%d/%d] %s\033[0m\n' "$STEP" "$STEPS" "$*"; printf '[%d/%d] %s\n' "$STEP" "$STEPS" "$*" >> "$LOG"; }
@@ -49,6 +71,8 @@ fresh() { [ "$FORCE" = 1 ] || [ ! -e "$1" ]; }   # this step's output is missing
 
 say "Grand Theft Auto: static recompilation setup (macOS)"
 [ "$(uname)" = Darwin ] || fail "this is the macOS setup; on Windows run Setup.cmd."
+[ "$GTA2" = required ] && fail "--targets gta2, but no GTA2.exe (Rockstar's installer) or installed gta2.exe is in ${GAME_ARG:-the game folder (no --game-dir given)}."
+[ "$GTA2" = 1 ] && say "GTA2 too: ${GTA2_INSTALLED:-${GTA2_FROM:-built here before}}"
 
 # ---------------------------------------------------------------- tools
 step "Checking the tools the build needs"
@@ -79,7 +103,7 @@ say "  Toolkit: $PCRECOMP"
 step "Extracting the game"
 GAME=$ROOT/game/extracted_full
 EXE=$GAME/WINO/Grand\ Theft\ Auto.exe
-if ! fresh "$EXE"; then
+if ! fresh "$GAME/.extracted"; then
   say "  Already extracted in game/extracted_full (skipping)."
 else
   g=${GAME_ARG%/}
@@ -88,7 +112,7 @@ else
   mkdir -p "$ROOT/game"
   installed=""
   [ -f "$g/WINO/Grand Theft Auto.exe" ] && installed=$g
-  [ -z "$installed" ] && [ -d "$g" ] && installed=$(find "$g" -maxdepth 3 -path '*/WINO/Grand Theft Auto.exe' -print -quit 2>/dev/null | sed 's|/WINO/Grand Theft Auto.exe$||')
+  [ -z "$installed" ] && [ -d "$g" ] && installed=$(first "$g" 3 -ipath '*/WINO/Grand Theft Auto.exe' | sed 's|/[^/]*/[^/]*$||')
   if [ -n "$installed" ]; then
     say "  Copying the installed game from $installed"
     rm -rf "$GAME"; mkdir -p "$GAME"
@@ -96,19 +120,20 @@ else
   else
     zip=""
     case "$g" in *.zip|*.ZIP) zip=$g ;; esac
-    [ -z "$zip" ] && [ -d "$g" ] && zip=$(find "$g" -maxdepth 2 -iname 'GTAINSTALLER*.zip' -print -quit 2>/dev/null)
+    [ -z "$zip" ] && [ -d "$g" ] && zip=$(first "$g" 2 -iname 'GTAINSTALLER*.zip')
     cabs=$g
     if [ -n "$zip" ]; then
       cabs=$ROOT/game/installer
       rm -rf "$cabs"; mkdir -p "$cabs"
       run "Unzipping $zip" unzip -q -o "$zip" -d "$cabs"
     fi
-    cab=$(find "$cabs" -maxdepth 3 -iname data1.cab -print -quit 2>/dev/null)
+    cab=$(first "$cabs" 3 -iname data1.cab)
     [ -n "$cab" ] || fail "no GTA1 found in $g: choose GTAINSTALLER.zip, a folder with data1.cab, or an installed copy."
-    hdr=$(find "$(dirname "$cab")" -maxdepth 1 -iname data1.hdr -print -quit)
+    hdr=$(first "$(dirname "$cab")" 1 -iname data1.hdr)
     run "Extracting the installer's cabinets" "$PY" "$PCRECOMP/tools/assets/isextract.py" "${hdr:-$cab}" "$cab" -o "$GAME"
   fi
   [ -f "$EXE" ] || fail "the extracted game has no WINO/Grand Theft Auto.exe."
+  touch "$GAME/.extracted"                        # complete: a cancelled copy is redone
 fi
 
 step "Translating the game's code to C (about 12 minutes, once)"
@@ -119,41 +144,40 @@ step "Applying the remaster's patches"
 run "Patching" "$PY" tools/patch_gen.py
 
 # ---------------------------------------------------------------- GTA2
-GTA2_DIR=$ROOT/gta2-game/extracted
 if [ "$GTA2" = 1 ]; then
   step "Extracting GTA2"
-  if ! fresh "$GTA2_DIR/gta2.exe"; then
+  if ! fresh "$GTA2_DIR/.extracted"; then
     say "  Already extracted in gta2-game/extracted (skipping)."
   else
-    from=${GAME_ARG%/}; [ -d "$from" ] || from=$(dirname "$from")
-    found=""; installer=""
-    while IFS= read -r f; do
-      d=$(dirname "$f")
-      if [ -d "$d/data" ] && [ -f "$d/d3ddll.dll" ]; then found=$d; break; fi
-      [ -z "$installer" ] && installer=$f
-    done < <(find "$from" -maxdepth 3 -iname gta2.exe 2>/dev/null)
     rm -rf "$GTA2_DIR"; mkdir -p "$GTA2_DIR"
-    if [ -n "$found" ]; then
-      run "Copying the installed GTA2 from $found" cp -R "$found/." "$GTA2_DIR/"
-    elif [ -n "$installer" ]; then
-      run "Extracting $installer" "$PY" tools/extract_gta2.py "$installer" -o "$GTA2_DIR"
+    if [ -n "$GTA2_INSTALLED" ]; then
+      run "Copying the installed GTA2 from $GTA2_INSTALLED" cp -R "$GTA2_INSTALLED/." "$GTA2_DIR/"
+    elif [ -n "$GTA2_FROM" ]; then
+      run "Extracting $GTA2_FROM" "$PY" tools/extract_gta2.py "$GTA2_FROM" -o "$GTA2_DIR"
     else
-      fail "GTA2 was ticked but no GTA2.exe (Rockstar's installer) or installed gta2.exe is in $from. Put GTA2.exe in that folder, or build without GTA2."
+      fail "GTA2 was built here before but its extracted copy is gone: put GTA2.exe in the game folder."
     fi
     [ -f "$GTA2_DIR/gta2.exe" ] || fail "the extracted GTA2 has no gta2.exe."
+    # The save slots' folder, which GTA2's installer makes and its cabinets do
+    # not hold: without it the game stops at "Unable to open file :
+    # player\plyslot0.dat". The game writes the slots itself.
+    mkdir -p "$GTA2_DIR/player"
+    touch "$GTA2_DIR/.extracted"
   fi
-  # The save slots' folder, which GTA2's installer makes and its cabinets do
-  # not hold: without it the game stops at "Unable to open file :
-  # player\plyslot0.dat". The game writes the slots itself.
-  mkdir -p "$GTA2_DIR/player"
 
   step "Translating GTA2's code to C"
-  if ! fresh src/recomp/gen_gta2/recomp_dispatch.c; then say "  Already done (skipping)."
+  # three lifts, each with its own dispatch rows: done only when all three are
+  if ! fresh src/recomp/gen_gta2/recomp_dispatch.c && ! fresh src/recomp/gen_dmavideo/recomp_dispatch.c \
+     && ! fresh src/recomp/gen_d3ddll/recomp_dispatch.c; then
+    say "  Already done (skipping)."
   else
+    dma=$(first "$GTA2_DIR" 1 -iname dmavideo.dll)
+    d3d=$(first "$GTA2_DIR" 1 -iname d3ddll.dll)
+    [ -n "$dma" ] && [ -n "$d3d" ] || fail "the extracted GTA2 has no dmavideo.dll or d3ddll.dll: extract it again (--force)."
+    rm -rf src/recomp/gen_gta2 src/recomp/gen_dmavideo src/recomp/gen_d3ddll
     run "Lifting gta2.exe" "$PY" tools/lift.py "$GTA2_DIR/gta2.exe" src/recomp/gen_gta2
-    dma=$(find "$GTA2_DIR" -maxdepth 1 -iname dmavideo.dll -print -quit)
     run "Lifting dmavideo.dll" "$PY" tools/lift.py "$dma" src/recomp/gen_dmavideo
-    run "Lifting d3ddll.dll" "$PY" tools/lift.py "$GTA2_DIR/d3ddll.dll" src/recomp/gen_d3ddll
+    run "Lifting d3ddll.dll" "$PY" tools/lift.py "$d3d" src/recomp/gen_d3ddll
   fi
   run "Patching" "$PY" tools/patch_gen_gta2.py
   run "Merging the three dispatch tables" "$PY" tools/merge_dispatch_gta2.py

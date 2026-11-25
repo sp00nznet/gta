@@ -18,13 +18,15 @@ native hosts use.
 
 recomp-launcher, as on Windows (`launcher/launcher.json`): the player opens
 `GTA-Recomp-Installer.app`, chooses the folder holding Rockstar's freeware
-`GTAINSTALLER.zip` (or its `data1.cab`, or an installed copy), ticks **Also
-GTA2** if its `GTA2.exe` is in the same folder, and **Build**; then **Play**.
-It runs `setup.sh`, which is also the way by hand:
+`GTAINSTALLER.zip` (or its `data1.cab`, or an installed copy) and **Build**;
+then **Play**. With GTA2's `GTA2.exe` in that folder too (or a folder inside
+it), GTA2 is built as well. The app is not signed: the first time, open it
+with right-click > Open (or Privacy & Security > Open Anyway). It runs
+`setup.sh`, which is also the way by hand:
 
 ```
-./setup.sh --game-dir ~/Downloads/GTA                  # GTA1
-./setup.sh --game-dir ~/Downloads/GTA --targets gta2   # and GTA2
+./setup.sh --game-dir ~/Downloads/GTA                  # GTA1, and GTA2 if its GTA2.exe is there
+./setup.sh --game-dir ~/Downloads/GTA --targets gta2   # GTA2 required: stop if it is not found
 ```
 
 It needs Xcode's command line tools and Homebrew, and installs CMake, Ninja,
