@@ -326,6 +326,10 @@ static void gta2_registry_seed(void) {
     hle_reg_set_string(0x80000002u, "SOFTWARE\\DMA Design Ltd\\GTA2\\Screen", "videoname", "dmavideo.dll");
     hle_reg_set_string(0x80000002u, "SOFTWARE\\DMA Design Ltd\\GTA2\\Screen", "rendername", "d3ddll.dll");
     hle_reg_set_dword(0x80000002u, "SOFTWARE\\DMA Design Ltd\\GTA2\\Screen", "videodevice", 0);
+    /* "3D Sound", the GTA2 Manager's box: the world's sounds through Miles'
+     * DirectSound3D provider (gta_mss.c's, in software) -- positioned,
+     * fading with distance -- rather than the thinner stereo fallback. */
+    hle_reg_set_dword(0x80000002u, "SOFTWARE\\DMA Design Ltd\\GTA2\\Sound", "do_3d_sound", 1);
 }
 
 static const win32hle_shim g_gta2_shims[] = {

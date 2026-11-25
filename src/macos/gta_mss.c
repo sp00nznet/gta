@@ -13,6 +13,7 @@
  * only ever held briefly around a voice, and the SDL audio thread never
  * touches the machine, so the two never nest.
  */
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -23,7 +24,7 @@
 #include "win32hle.h"
 #include "gta_mixer.h"
 
-#define MAX_MSS_SAMPLES  32
+#define MAX_MSS_SAMPLES  48
 #define MAX_MSS_STREAMS  4
 #define MAX_MSS_TIMERS   8
 
@@ -281,7 +282,7 @@ static void sample_push(MSS_Sample *smp) {
     mixer_voice_set_loop_block(smp->voice, smp->loop_start, smp->loop_end);
 }
 
-static void mss_AIL_allocate_sample_handle(void) {
+static uint32_t sample_alloc(void) {
     for (int i = 0; i < MAX_MSS_SAMPLES; i++) {
         if (!g_samples[i].active) {
             memset(&g_samples[i], 0, sizeof(MSS_Sample));
@@ -294,20 +295,48 @@ static void mss_AIL_allocate_sample_handle(void) {
             g_samples[i].bits = 8;        /* Miles default until set_sample_type */
             g_samples[i].channels = 1;
             g_samples[i].voice = mixer_voice_alloc();
-            RET((uint32_t)(i + 1), 1);
+            return (uint32_t)(i + 1);
         }
     }
-    RET(0, 1);
     (void)g_next_sample;
+    return 0;
+}
+
+static void mss_AIL_allocate_sample_handle(void) { RET(sample_alloc(), 1); }
+
+static void sample_free(MSS_Sample *smp) {
+    if (smp->voice >= 0) { mixer_voice_stop(smp->voice); mixer_voice_free(smp->voice); smp->voice = -1; }
+    smp->active = 0;
+    smp->status = SMP_FREE;
+}
+
+static void sample_start(MSS_Sample *smp) {
+    smp->status = SMP_PLAYING;
+    smp->was_playing = 1;
+    sample_push(smp);
+    if (mixer_trace_enabled())
+        fprintf(stderr, "[mss] start_sample data=%p len=%u %dHz %dbit %dch vol=%d\n",
+                smp->data, smp->data_len, smp->rate, smp->bits, smp->channels, smp->volume);
+    if (smp->voice >= 0) mixer_voice_start(smp->voice);
+}
+
+static void sample_end(MSS_Sample *smp) {
+    smp->status = SMP_DONE;
+    smp->was_playing = 0;
+    if (smp->voice >= 0) mixer_voice_stop(smp->voice);
+}
+
+static uint32_t sample_status(MSS_Sample *smp) {
+    if (smp->was_playing && smp->voice >= 0 && !mixer_voice_playing(smp->voice)) {
+        smp->was_playing = 0;
+        smp->status = SMP_DONE;
+    }
+    return (uint32_t)smp->status;
 }
 
 static void mss_AIL_release_sample_handle(void) {
     MSS_Sample *smp = sample_get(A32(0));
-    if (smp) {
-        if (smp->voice >= 0) { mixer_voice_stop(smp->voice); mixer_voice_free(smp->voice); smp->voice = -1; }
-        smp->active = 0;
-        smp->status = SMP_FREE;
-    }
+    if (smp) sample_free(smp);
     RET(0, 1);
 }
 
@@ -391,25 +420,13 @@ static void mss_AIL_set_sample_loop_count(void) {
 
 static void mss_AIL_start_sample(void) {
     MSS_Sample *smp = sample_get(A32(0));
-    if (smp) {
-        smp->status = SMP_PLAYING;
-        smp->was_playing = 1;
-        sample_push(smp);
-        if (mixer_trace_enabled())
-            fprintf(stderr, "[mss] start_sample data=%p len=%u %dHz %dbit %dch vol=%d\n",
-                    smp->data, smp->data_len, smp->rate, smp->bits, smp->channels, smp->volume);
-        if (smp->voice >= 0) mixer_voice_start(smp->voice);
-    }
+    if (smp) sample_start(smp);
     RET(0, 1);
 }
 
 static void mss_AIL_end_sample(void) {
     MSS_Sample *smp = sample_get(A32(0));
-    if (smp) {
-        smp->status = SMP_DONE;
-        smp->was_playing = 0;
-        if (smp->voice >= 0) mixer_voice_stop(smp->voice);
-    }
+    if (smp) sample_end(smp);
     RET(0, 1);
 }
 
@@ -424,12 +441,7 @@ static void mss_AIL_set_sample_loop_block(void) {     /* (sample, start offset, 
 
 static void mss_AIL_sample_status(void) {
     MSS_Sample *smp = sample_get(A32(0));
-    if (!smp) RET(SMP_FREE, 1);
-    if (smp->was_playing && smp->voice >= 0 && !mixer_voice_playing(smp->voice)) {
-        smp->was_playing = 0;
-        smp->status = SMP_DONE;
-    }
-    RET((uint32_t)smp->status, 1);
+    RET(smp ? sample_status(smp) : SMP_FREE, 1);
 }
 
 /* ---- streams: the radio's ten tracks, loaded from the game's WAVs ------ */
@@ -631,25 +643,139 @@ static void mss_AIL_delay(void) {                         /* in 60ths of a secon
 static void mss_AIL_digital_handle_release(void) { RET(1, 1); }
 static void mss_AIL_digital_handle_reacquire(void) { RET(1, 1); }
 
-/* Miles' 3D sound goes through a provider (A3D, EAX, DirectSound3D, its own
- * software one). None is offered: a machine without one, which the game
- * plays in stereo. The rest answers sanely in case one is asked for anyway. */
+/* Miles' 3D sound goes through a provider. GTA2 looks for the one it ships,
+ * MSSDS3DH.M3D, by name ("Microsoft DirectSound3D hardware support"), asks
+ * for 8 to 16 voices, and plays the world through them -- without one it
+ * falls back to a thinner stereo path. So one is offered, in software: a 3D
+ * sample is a 2D sample whose volume and pan follow its position, the
+ * listener at the origin facing +z (Miles' default; GTA2 never moves it),
+ * DirectSound3D's model -- full inside the minimum distance, 1/distance
+ * past it, silent beyond the maximum. No EAX: the game asks, and goes
+ * without. */
+#define MAX_3D 16
+#define H3D_BASE 0x3D00u
+typedef struct {
+    int active;
+    uint32_t smp;                     /* the 2D sample underneath (handle) */
+    int volume;                       /* the game's 0..127 */
+    float x, y, z, min_d, max_d;
+} S3D;
+static S3D g_3d[MAX_3D];
+static const char k_provider[] = "Microsoft DirectSound3D hardware support";
+static uint32_t g_provider_name;
+
+static S3D *s3d_get(uint32_t h) {
+    uint32_t i = h - H3D_BASE;
+    return i < MAX_3D && g_3d[i].active ? &g_3d[i] : NULL;
+}
+static void s3d_apply(S3D *t) {
+    MSS_Sample *smp = sample_get(t->smp);
+    if (!smp) return;
+    float d = sqrtf(t->x * t->x + t->y * t->y + t->z * t->z);
+    float gain = 1.0f;
+    if (t->max_d > 0 && d > t->max_d) gain = 0;
+    else if (d > t->min_d && t->min_d > 0) gain = t->min_d / d;
+    float side = d > 0.001f ? t->x / (d > t->min_d ? d : (t->min_d > 0 ? t->min_d : d)) : 0;
+    if (side > 1) side = 1;
+    if (side < -1) side = -1;
+    smp->volume = (int)((float)t->volume * gain + 0.5f);
+    smp->pan = 64 + (int)(side * 50.0f);   /* DirectSound3D pans, it never isolates an ear */
+    if (smp->voice >= 0) mixer_voice_set_volume(smp->voice, smp->volume), mixer_voice_set_pan(smp->voice, smp->pan);
+    if (getenv("GTA_3D_TRACE"))
+        fprintf(stderr, "[mss3d] %u at %.1f,%.1f,%.1f (min %.1f max %.1f) vol %d -> %d pan %d\n",
+                t->smp, t->x, t->y, t->z, t->min_d, t->max_d, t->volume, smp->volume, smp->pan);
+}
+
 static void mss_AIL_enumerate_3D_providers(void) {        /* (&next, &provider, &name) -> more? */
-    if (A32(1)) MEM32(A32(1)) = 0;
-    if (A32(2)) MEM32(A32(2)) = 0;
+    uint32_t next = A32(0) ? MEM32(A32(0)) : 1;
+    if (next != 0) RET(0, 3);
+    if (!g_provider_name) g_provider_name = hle_guest_strdup(k_provider);
+    MEM32(A32(0)) = 1;
+    if (A32(1)) MEM32(A32(1)) = 1;
+    if (A32(2)) MEM32(A32(2)) = g_provider_name;
+    RET(1, 3);
+}
+static void mss_AIL_open_3D_provider(void) { RET(A32(0) == 1 ? 0u : 1u, 1); }   /* M3D_NOERR, M3D_NOTFOUND */
+static void mss_AIL_close_3D_provider(void) { RET(0, 1); }
+static void mss_AIL_3D_provider_attribute(void) {         /* (provider, name, &value) */
+    const char *name = A32(1) ? ASTR(1) : "";
+    uint32_t v = 0;
+    if (!strcmp(name, "Maximum supported samples")) v = MAX_3D;
+    else if (!strncmp(name, "EAX", 3)) v = 0xFFFFFFFFu;   /* no EAX */
+    if (A32(2)) MEM32(A32(2)) = v;
     RET(0, 3);
 }
-static void mss_AIL_open_3D_provider(void) { RET(1, 1); }            /* M3D_NOTFOUND */
-static void mss_AIL_close_3D_provider(void) { RET(0, 1); }
-static void mss_AIL_3D_provider_attribute(void) { if (A32(2)) MEM32(A32(2)) = 0; RET(0, 3); }
 static void mss_AIL_set_3D_provider_preference(void) { RET(0, 3); }
-static void mss_AIL_allocate_3D_sample_handle(void) { RET(0, 1); }   /* none to give */
-static void mss_AIL_3D_sample_status(void) { RET(SMP_DONE, 1); }
-static void mss_3d_void1(void) { RET(0, 1); }
-static void mss_3d_void2(void) { RET(0, 2); }
-static void mss_3d_void3(void) { RET(0, 3); }
-static void mss_3d_void4(void) { RET(0, 4); }
-static void mss_3d_void5(void) { RET(0, 5); }
+static void mss_AIL_allocate_3D_sample_handle(void) {
+    for (int i = 0; i < MAX_3D; i++) {
+        if (g_3d[i].active) continue;
+        uint32_t h = sample_alloc();
+        if (!h) break;
+        memset(&g_3d[i], 0, sizeof g_3d[i]);
+        g_3d[i].active = 1, g_3d[i].smp = h, g_3d[i].volume = 127, g_3d[i].min_d = 1, g_3d[i].max_d = 1e9f;
+        RET(H3D_BASE + (uint32_t)i, 1);
+    }
+    RET(0, 1);
+}
+#define S3D_SMP(t) ((t) ? sample_get((t)->smp) : NULL)
+static void mss_AIL_release_3D_sample_handle(void) {
+    S3D *t = s3d_get(A32(0));
+    MSS_Sample *smp = S3D_SMP(t);
+    if (smp) sample_free(smp);
+    if (t) t->active = 0;
+    RET(0, 1);
+}
+static void mss_AIL_set_3D_sample_info(void) {            /* (sample, AILSOUNDINFO *) -> success */
+    MSS_Sample *smp = S3D_SMP(s3d_get(A32(0)));
+    uint32_t info = A32(1);
+    if (!smp || !info || MEM32(info) != 1) RET(0, 2);      /* WAVE_FORMAT_PCM only */
+    smp->data = hle_ptr(MEM32(info + 4));
+    smp->data_len = MEM32(info + 8);
+    smp->rate = (int)MEM32(info + 12);
+    smp->bits = MEM32(info + 16) == 16 ? 16 : 8;
+    smp->channels = MEM32(info + 20) == 2 ? 2 : 1;
+    smp->is_signed = 0;                                    /* WAV: 8-bit is offset binary */
+    smp->loop_count = 1, smp->loop_start = 0, smp->loop_end = -1;
+    sample_push(smp);
+    RET(1, 2);
+}
+static void mss_AIL_start_3D_sample(void) { MSS_Sample *smp = S3D_SMP(s3d_get(A32(0))); if (smp) sample_start(smp); RET(0, 1); }
+static void mss_AIL_end_3D_sample(void) { MSS_Sample *smp = S3D_SMP(s3d_get(A32(0))); if (smp) sample_end(smp); RET(0, 1); }
+static void mss_AIL_3D_sample_status(void) { MSS_Sample *smp = S3D_SMP(s3d_get(A32(0))); RET(smp ? sample_status(smp) : SMP_FREE, 1); }
+static void mss_AIL_set_3D_sample_loop_count(void) {
+    MSS_Sample *smp = S3D_SMP(s3d_get(A32(0)));
+    if (smp) { smp->loop_count = (int32_t)A32(1); if (smp->voice >= 0) mixer_voice_set_loop(smp->voice, smp->loop_count); }
+    RET(0, 2);
+}
+static void mss_AIL_set_3D_sample_loop_block(void) {
+    MSS_Sample *smp = S3D_SMP(s3d_get(A32(0)));
+    if (smp) {
+        smp->loop_start = (int32_t)A32(1), smp->loop_end = (int32_t)A32(2);
+        if (smp->voice >= 0) mixer_voice_set_loop_block(smp->voice, smp->loop_start, smp->loop_end);
+    }
+    RET(0, 3);
+}
+static void mss_AIL_set_3D_sample_playback_rate(void) {
+    MSS_Sample *smp = S3D_SMP(s3d_get(A32(0)));
+    if (smp && (int32_t)A32(1) > 0) { smp->rate = (int32_t)A32(1); if (smp->voice >= 0) mixer_voice_set_rate(smp->voice, smp->rate); }
+    RET(0, 2);
+}
+static float f32(uint32_t v) { float f; memcpy(&f, &v, 4); return f; }
+static void mss_AIL_set_3D_sample_volume(void) {
+    S3D *t = s3d_get(A32(0));
+    if (t) t->volume = (int)A32(1), s3d_apply(t);
+    RET(0, 2);
+}
+static void mss_AIL_set_3D_position(void) {               /* (object, x, y, z) */
+    S3D *t = s3d_get(A32(0));
+    if (t) t->x = f32(A32(1)), t->y = f32(A32(2)), t->z = f32(A32(3)), s3d_apply(t);
+    RET(0, 4);
+}
+static void mss_AIL_set_3D_sample_float_distances(void) { /* (sample, max front, min front, max back, min back) */
+    S3D *t = s3d_get(A32(0));
+    if (t) t->max_d = f32(A32(1)), t->min_d = f32(A32(2)), s3d_apply(t);
+    RET(0, 5);
+}
 
 /* The imports, by their stdcall-decorated names (GTA1's 38, GTA2's more). Registered before
  * win32hle's own mss module, so these win. */
@@ -707,16 +833,16 @@ const win32hle_shim gta_mss_shims[] = {
     { "_AIL_3D_provider_attribute@12",        mss_AIL_3D_provider_attribute },
     { "_AIL_set_3D_provider_preference@12",   mss_AIL_set_3D_provider_preference },
     { "_AIL_allocate_3D_sample_handle@4",     mss_AIL_allocate_3D_sample_handle },
-    { "_AIL_release_3D_sample_handle@4",      mss_3d_void1 },
-    { "_AIL_start_3D_sample@4",               mss_3d_void1 },
-    { "_AIL_end_3D_sample@4",                 mss_3d_void1 },
+    { "_AIL_release_3D_sample_handle@4",      mss_AIL_release_3D_sample_handle },
+    { "_AIL_start_3D_sample@4",               mss_AIL_start_3D_sample },
+    { "_AIL_end_3D_sample@4",                 mss_AIL_end_3D_sample },
     { "_AIL_3D_sample_status@4",              mss_AIL_3D_sample_status },
-    { "_AIL_set_3D_sample_loop_count@8",      mss_3d_void2 },
-    { "_AIL_set_3D_sample_loop_block@12",     mss_3d_void3 },
-    { "_AIL_set_3D_sample_playback_rate@8",   mss_3d_void2 },
-    { "_AIL_set_3D_sample_volume@8",          mss_3d_void2 },
-    { "_AIL_set_3D_sample_info@8",            mss_3d_void2 },
-    { "_AIL_set_3D_position@16",              mss_3d_void4 },
-    { "_AIL_set_3D_sample_float_distances@20", mss_3d_void5 },
+    { "_AIL_set_3D_sample_loop_count@8",      mss_AIL_set_3D_sample_loop_count },
+    { "_AIL_set_3D_sample_loop_block@12",     mss_AIL_set_3D_sample_loop_block },
+    { "_AIL_set_3D_sample_playback_rate@8",   mss_AIL_set_3D_sample_playback_rate },
+    { "_AIL_set_3D_sample_volume@8",          mss_AIL_set_3D_sample_volume },
+    { "_AIL_set_3D_sample_info@8",            mss_AIL_set_3D_sample_info },
+    { "_AIL_set_3D_position@16",              mss_AIL_set_3D_position },
+    { "_AIL_set_3D_sample_float_distances@20", mss_AIL_set_3D_sample_float_distances },
     { 0, 0 }
 };

@@ -104,8 +104,14 @@ build-macos/bin/gta2 --run                 # gta2-game/extracted by default
 ```
 
 Intro (Bink, with sound), menu, and the city: walking, traffic, HUD, the
-menu music and the game's sounds through the Miles mixer (Miles 3D answers
-"no provider", so the game mixes in stereo). What it took past the intro:
+radio and the game's sounds through the Miles mixer. The radio stations and
+the vocals are IMA ADPCM WAVs, decoded on load (bit-exact with Apple's
+decoder; played raw they were a hiss). The world's sounds go through Miles
+3D: the host offers the provider GTA2 ships and looks for by name
+("Microsoft DirectSound3D hardware support"), in software -- volume by
+distance as DirectSound3D does it, pan by side, no EAX -- and seeds
+`Sound\do_3d_sound`, the GTA2 Manager's "3D Sound" box. What it took past
+the intro:
 
 - `IDirect3D3::EnumDevices` lists RGB Emulation before the HAL, as Windows
   does: d3ddll asks for "the second device its callback accepted", and

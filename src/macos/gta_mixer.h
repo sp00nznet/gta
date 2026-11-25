@@ -7,7 +7,7 @@
 
 #define MIXER_RATE      22050
 #define MIXER_CHANNELS  2
-#define MIXER_VOICES    40
+#define MIXER_VOICES    64
 
 int  mixer_init(void);
 void mixer_shutdown(void);

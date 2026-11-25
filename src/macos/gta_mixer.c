@@ -155,7 +155,21 @@ static void mix_into(short *out, int frames) {
                 v->playing = 0;
                 break;
             }
+            /* Linear interpolation between this frame and the next, as Miles
+             * resamples: nearest-frame stepping made a pitched sound (an
+             * engine at 13 kHz into the 22 kHz mix) gritty and metallic. */
             fetch(v, f, &sl, &sr);
+            {
+                uint32_t frac = (uint32_t)(v->pos & ((1u << FRAC_BITS) - 1));
+                uint32_t g = f + 1;
+                if (g >= end) g = (v->loop != 1 && end <= total_frames) ? (v->loop_start < end ? v->loop_start : 0) : f;
+                if (frac && g < total_frames) {
+                    int nl, nr;
+                    fetch(v, g, &nl, &nr);
+                    sl += (int)(((long long)(nl - sl) * frac) >> FRAC_BITS);
+                    sr += (int)(((long long)(nr - sr) * frac) >> FRAC_BITS);
+                }
+            }
             /* volume 0..127, pan 0..127, master 0..127 -> shift by 21 */
             acc[i * 2 + 0] += (int)(((long long)sl * gain_l) >> 21);
             acc[i * 2 + 1] += (int)(((long long)sr * gain_r) >> 21);
@@ -406,11 +420,71 @@ void mixer_set_master_volume(int vol) {
  * Chunk-walking rather than assuming a 44-byte header: the game's tracks are
  * plain RIFF/WAVE but nothing guarantees fmt is first or that there is no LIST.
  */
+/* IMA ADPCM, Microsoft's WAV layout (format 0x11): each block starts with a
+ * header per channel (the first sample, the step index), then 4-bit codes,
+ * low nibble first, in runs of eight samples a channel interleaved four
+ * bytes at a time. GTA2's radio stations and vocals are all this; read as
+ * PCM they were noise -- the hiss in the city. */
+static const int k_ima_step[89] = {
+    7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97,
+    107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796,
+    876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871,
+    5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623,
+    27086, 29794, 32767 };
+static const int k_ima_index[16] = { -1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8 };
+static int ima_nibble(int code, int *pred, int *index) {
+    int step = k_ima_step[*index], diff = step >> 3;
+    if (code & 1) diff += step >> 2;
+    if (code & 2) diff += step >> 1;
+    if (code & 4) diff += step;
+    *pred += (code & 8) ? -diff : diff;
+    if (*pred > 32767) *pred = 32767;
+    if (*pred < -32768) *pred = -32768;
+    *index += k_ima_index[code & 15];
+    if (*index < 0) *index = 0;
+    if (*index > 88) *index = 88;
+    return *pred;
+}
+static int16_t *ima_decode(const unsigned char *in, uint32_t n, int chans, int block, uint32_t *out_bytes) {
+    if (chans < 1 || chans > 2 || block < 4 * chans) return NULL;
+    uint32_t per_block = (uint32_t)((block - 4 * chans) * 2 / chans + 1);   /* samples a channel */
+    uint32_t blocks = (n + (uint32_t)block - 1) / (uint32_t)block;
+    int16_t *out = (int16_t *)malloc((size_t)blocks * per_block * (size_t)chans * 2 + 2);
+    if (!out) return NULL;
+    size_t w = 0;
+    for (uint32_t b = 0; b < blocks; b++) {
+        const unsigned char *p = in + (size_t)b * (size_t)block;
+        uint32_t len = n - b * (uint32_t)block < (uint32_t)block ? n - b * (uint32_t)block : (uint32_t)block;
+        if (len < (uint32_t)(4 * chans)) break;
+        int pred[2], index[2];
+        for (int c = 0; c < chans; c++) {
+            pred[c] = (int16_t)(p[4 * c] | p[4 * c + 1] << 8);
+            index[c] = p[4 * c + 2] > 88 ? 88 : p[4 * c + 2];
+            out[w + (size_t)c] = (int16_t)pred[c];
+        }
+        w += (size_t)chans;
+        const unsigned char *d = p + 4 * chans, *end = p + len;
+        int16_t *frame = out + w;                    /* this block's samples after the header one */
+        uint32_t got = 0;
+        while (d + 4 * chans <= end) {               /* eight samples a channel */
+            for (int c = 0; c < chans; c++, d += 4)
+                for (int k = 0; k < 8; k++) {
+                    int code = (d[k >> 1] >> ((k & 1) * 4)) & 15;
+                    frame[(size_t)(got + (uint32_t)k) * (size_t)chans + (size_t)c] = (int16_t)ima_nibble(code, &pred[c], &index[c]);
+                }
+            got += 8;
+        }
+        w += (size_t)got * (size_t)chans;
+    }
+    *out_bytes = (uint32_t)(w * 2);
+    return out;
+}
+
 void *mixer_load_wav(const char *path, uint32_t *bytes, int *rate, int *bits, int *channels) {
     FILE *f = fopen(path, "rb");
     unsigned char hdr[12], ch[8];
     void *pcm = NULL;
-    int have_fmt = 0;
+    int have_fmt = 0, tag = 1, block = 0;
 
     if (!f) return NULL;
     if (fread(hdr, 1, 12, f) != 12 || memcmp(hdr, "RIFF", 4) || memcmp(hdr + 8, "WAVE", 4)) {
@@ -427,6 +501,8 @@ void *mixer_load_wav(const char *path, uint32_t *bytes, int *rate, int *bits, in
             *channels = fmt[2] | (fmt[3] << 8);
             *rate     = (int)((uint32_t)fmt[4] | ((uint32_t)fmt[5] << 8) | ((uint32_t)fmt[6] << 16) | ((uint32_t)fmt[7] << 24));
             *bits     = fmt[14] | (fmt[15] << 8);
+            tag       = fmt[0] | (fmt[1] << 8);
+            block     = fmt[12] | (fmt[13] << 8);
             have_fmt  = 1;
             if (size > want) fseek(f, (long)(size - want), SEEK_CUR);
         } else if (!memcmp(ch, "data", 4)) {
@@ -445,6 +521,17 @@ void *mixer_load_wav(const char *path, uint32_t *bytes, int *rate, int *bits, in
     }
     fclose(f);
     if (!have_fmt) { free(pcm); pcm = NULL; }
+    if (pcm && tag == 0x11) {                        /* IMA ADPCM: to 16-bit PCM */
+        uint32_t n = 0;
+        int16_t *dec = ima_decode((const unsigned char *)pcm, *bytes, *channels, block, &n);
+        free(pcm);
+        pcm = dec;
+        if (dec) *bytes = n, *bits = 16;
+    } else if (pcm && tag != 1) {                    /* a codec not decoded here: silence, not noise */
+        fprintf(stderr, "  MIXER: %s: WAV format 0x%X not decoded\n", path, tag);
+        free(pcm);
+        pcm = NULL;
+    }
     return pcm;
 }
 
