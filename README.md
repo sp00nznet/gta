@@ -3,7 +3,10 @@
 **[Download the installer](https://github.com/sp00nznet/gta/releases)** (Windows), or run `Setup.cmd`. You need the game: Rockstar's freeware release, or your own disc.
 
 A static recompilation of the original **Grand Theft Auto** (1997) by DMA Design,
-and its mission pack **GTA: London 1969**, targeting modern Windows. No
+and its mission pack **GTA: London 1969**, targeting modern Windows -- and,
+natively, macOS on Apple silicon: the same lifted C on pcrecomp's
+`runtime/win32hle`, a 64-bit arm64 program with no emulator and no Wine
+([docs/macos.md](docs/macos.md)). No
 emulation: the original x86 machine code is lifted to compilable C, linked
 against modern replacements for the legacy APIs, and compiled into a native
 executable -- with the remaster the game never had, built around its own code.
@@ -304,6 +307,8 @@ from Gunman's and Red Alert 2's.
   methods the game uses, testing two copies
 - [docs/coop.md](docs/coop.md): co-op -- how levels and missions are built, the
   design, what is done and what is not
+- [docs/macos.md](docs/macos.md): the native macOS host -- building, playing,
+  what is shared with the Windows build and what is its own
 
 ## License
 

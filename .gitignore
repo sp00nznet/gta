@@ -51,3 +51,11 @@ work/
 
 # Setup.cmd output
 *.lnk
+
+# macOS host: build output, runtime overlay and the user's own game material
+build-macos/
+macos-overlay/
+repack-extracted/
+GTA2INSTALLER/
+gta2-game/
+*.cab

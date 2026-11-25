@@ -41,6 +41,57 @@ if(NOT GTA1_RECOMP_SOURCES)
 endif()
 
 # --- GTA1 target ---
+if(APPLE)
+    # Native macOS: the lifted C on pcrecomp's runtime/win32hle, a 64-bit
+    # arm64 host (RECOMP_MEM_BASE: the guest's 4 GB is one block of the
+    # host's memory). Every Win32 import is answered by win32hle itself.
+    # build-macos.sh builds this.
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
+    pkg_check_modules(SDL2_TTF REQUIRED IMPORTED_TARGET SDL2_ttf)
+    set(HLE "${PCRECOMP_HOME}/runtime/win32hle")
+    file(GLOB HLE_SOURCES CONFIGURE_DEPENDS "${HLE}/*.c")
+    list(FILTER HLE_SOURCES EXCLUDE REGEX "_selftest\\.c$|/[.]_[^/]*$")
+    # recomp_part.c is drive32's MSVC part-DLL artifact (__declspec); the
+    # single-binary host uses recomp_dispatch.c instead.
+    list(FILTER GTA1_RECOMP_SOURCES EXCLUDE REGEX "recomp_part\\.c$")
+    add_executable(gta1
+        src/macos/main.c
+        src/macos/gta_hooks.c
+        src/macos/gta_menu.c
+        src/macos/gta_mixer.c
+        src/macos/gta_mss.c
+        src/macos/gta_net.c
+        src/macos/gta_pad.c
+        src/macos/gta_smack.c
+        ${HLE_SOURCES}
+        ${GTA1_RECOMP_SOURCES})
+    target_include_directories(gta1 PRIVATE src/macos src/remaster ${HLE})
+    # The fast set redalert2-recomp's native host uses (#65, #66): local
+    # registers (the globals are reloaded after every store the compiler
+    # cannot prove misses guest memory), indirect-call targets cached per
+    # site and in one table (safe: win32hle's machine lock runs one guest
+    # thread at a time), no icall trace ring, and the x87 stack as a ring
+    # with a function's own pushes in locals. The drive32 lift emits
+    # RECOMP_REGS_LOCALS/OUT and _ST(i), so it takes all of these.
+    # GTA_FAST_ICALLS=OFF brings the indirect-call trace ring back, for a
+    # crash report that names the call chain (a debug build).
+    option(GTA_FAST_ICALLS "Cache indirect-call targets, x87 ring, drop the icall trace ring" ON)
+    if(GTA_FAST_ICALLS)
+        target_compile_definitions(gta1 PRIVATE
+            RECOMP_RESOLVE_CACHE=16384 RECOMP_ICALL_SITE_CACHE RECOMP_NO_ICALL_TRACE
+            RECOMP_X87_RING RECOMP_X87_LOCAL)
+    endif()
+    set_source_files_properties(${GTA1_RECOMP_SOURCES} PROPERTIES
+        COMPILE_OPTIONS "-O2;-w;-fno-strict-aliasing;-fwrapv")
+    target_compile_options(gta1 PRIVATE -fno-strict-aliasing -fwrapv)
+    target_link_libraries(gta1 PRIVATE PkgConfig::SDL2 PkgConfig::SDL2_TTF pthread m)
+    set_target_properties(gta1 PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+        OUTPUT_NAME gta1)
+    return()
+endif()
+
 add_executable(gta1
     # Engine core
     src/engine/main.c
