@@ -22,6 +22,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <ctype.h>
+#include <time.h>
 #include <signal.h>
 #include <unistd.h>
 #include <errno.h>
@@ -31,6 +34,7 @@
 #include <SDL2/SDL.h>
 
 #include "win32hle.h"
+#include "gta_keys.h"
 #include "pe_loader.h"
 #include "host.h"
 
@@ -429,19 +433,6 @@ static int quit_watch(void *ud, SDL_Event *e) {
     return 1;
 }
 
-static void *autotap_thread(void *arg) {
-    (void)arg;
-    sleep((unsigned)g_autotap);
-    fprintf(stderr, "[host] autotap: Enter down, up\n");
-    hle_input_key(1, 0x0D, 0x1C);
-    hle_block_begin();
-    struct timespec ts = { 0, 150 * 1000000L };
-    nanosleep(&ts, NULL);
-    hle_block_end();
-    hle_input_key(0, 0x0D, 0x1C);
-    return NULL;
-}
-
 static void frame_pump(void) {
     static int watching;
     if (!watching && SDL_WasInit(SDL_INIT_EVENTS)) { SDL_AddEventWatch(quit_watch, NULL); watching = 1; }
@@ -454,7 +445,8 @@ static void frame_pump(void) {
     if ((int32_t)(now - next) < 0 || !hle_dd_frame(&px, &w, &h, &pitch, &bpp, &pal, NULL)) return;
     next = now + 3333;
     fprintf(stderr, "[host] frame %ld checksum %08X (%dx%dx%d)\n",
-            g_shown++, checksum(px, w, h, pitch, bpp), w, h, bpp);
+            g_shown, checksum(px, w, h, pitch, bpp), w, h, bpp);
+    gta_shoot(px, w, h, pitch, bpp, pal, g_shown++);
 }
 
 /* ---- main -------------------------------------------------------------- */
@@ -577,11 +569,7 @@ int main(int argc, char **argv) {
         pthread_create(&t, NULL, watchdog, NULL);
         pthread_detach(t);
     }
-    if (g_autotap) {
-        pthread_t t;
-        pthread_create(&t, NULL, autotap_thread, NULL);
-        pthread_detach(t);
-    }
+    gta_keys_start(g_autotap);
     printf("  entering 0x%08X\n\n", entry_va);
     fflush(stdout);
     uint32_t rc = hle_call_guest(entry_va, 0, NULL);

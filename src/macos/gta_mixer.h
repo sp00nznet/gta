@@ -20,6 +20,7 @@ void mixer_voice_set_volume(int v, int vol);     /* 0..127 */
 void mixer_voice_set_pan(int v, int pan);        /* 0 left, 64 centre, 127 right */
 void mixer_voice_set_rate(int v, int rate);
 void mixer_voice_set_loop(int v, int count);     /* 0 or negative = forever */
+void mixer_voice_set_loop_block(int v, int32_t start_byte, int32_t end_byte);   /* end < 0: the buffer's end */
 void mixer_voice_start(int v);
 void mixer_voice_stop(int v);
 int  mixer_voice_playing(int v);

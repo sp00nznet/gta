@@ -6,23 +6,17 @@ GTA1 address and would land here as corruption).
 
 Hooks, at a function's top, written model-agnostically (g_eax/g_esp: at the
 top of a body the globals still hold the entry state in both register
-models).
+models). None today.
 
-sub_004C3910  the startup timing logger's formatter (reached through the
-              vtordisp thunk sub_00560C80: ecx = the object at 0x671EBC,
-              jmp): a thiscall that waits 500 ms, formats seconds since
-              boot into a string and hands it on. During bring-up its
-              callee's saved-register area is scribbled over (a sequential
-              0x7C..0x93 byte ramp lands on the guest stack), the popped
-              esi comes back garbage and the mul [esi] faults. The logger
-              is cosmetic -- the game runs without it -- so until its
-              cause is found, answer it as a no-op and keep going.
+(sub_004C3910, the startup timing logger, was answered as a no-op here
+while its popped esi came back garbage. The cause was the lifter's: the
+TSC reader at 0x004C3850 brackets rdtsc with pushaw/popaw, which it
+dropped, so the two stores meant for its own frame landed 16 bytes up on
+the caller's saved esi and ebx. pcrecomp lifts the pair now.)
 """
 import glob, os, sys
 
-HOOKS = {
-    'sub_004C3910': 'g_esp += 4; g_eax = 0; return;   /* bring-up: the timing logger, neutralised (see tools/patch_gen_gta2.py) */',
-}
+HOOKS = {}
 
 out = sys.argv[1] if len(sys.argv) > 1 else os.path.join('src', 'recomp', 'gen_gta2')
 done = 0

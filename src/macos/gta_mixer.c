@@ -31,6 +31,7 @@ typedef struct {
     int is_signed;   /* 8-bit only */
     int volume, pan;
     int loop;          /* remaining plays; <= 0 means forever */
+    uint32_t loop_start, loop_end;   /* the looped block in frames; end 0 = the buffer's end */
     unsigned long long pos;   /* frame position, 16.16 fixed point: 64-bit, or it
                                * wraps after 65,536 frames (3 s of a radio track) */
     int playing;
@@ -142,11 +143,17 @@ static void mix_into(short *out, int frames) {
             uint32_t f = (uint32_t)(v->pos >> FRAC_BITS);
             int sl, sr;
 
-            if (f >= total_frames) {
-                if (v->loop > 0) v->loop--;
-                if (v->loop == 0) { v->playing = 0; break; }
-                v->pos = 0;
-                f = 0;
+            /* Miles: a count of 1 plays once, n plays n times, 0 or less
+             * forever; with a loop block, each pass but the last goes back
+             * to the block's start at its end, the last plays out the rest. */
+            uint32_t end = v->loop_end && v->loop_end < total_frames ? v->loop_end : total_frames;
+            if (v->loop != 1 && f >= end) {
+                if (v->loop > 1) v->loop--;
+                f = v->loop_start < end ? v->loop_start : 0;
+                v->pos = (unsigned long long)f << FRAC_BITS;
+            } else if (f >= total_frames) {
+                v->playing = 0;
+                break;
             }
             fetch(v, f, &sl, &sr);
             /* volume 0..127, pan 0..127, master 0..127 -> shift by 21 */
@@ -299,6 +306,20 @@ void mixer_voice_set_pcm(int v, const void *pcm, uint32_t bytes, int rate, int b
         x->bits = bits == 16 ? 16 : 8;
         x->channels = channels == 2 ? 2 : 1;
         x->is_signed = is_signed;
+    }
+    UNLOCK();
+}
+
+/* Miles' loop block: the bytes from start to end repeat, the rest plays
+ * once (end < 0: to the buffer's end). */
+void mixer_voice_set_loop_block(int v, int32_t start_byte, int32_t end_byte) {
+    Voice *x;
+    LOCK();
+    if ((x = get(v))) {
+        uint32_t stride = (uint32_t)x->channels * (uint32_t)(x->bits / 8);
+        if (!stride) stride = 1;
+        x->loop_start = start_byte > 0 ? (uint32_t)start_byte / stride : 0;
+        x->loop_end = end_byte > 0 ? (uint32_t)end_byte / stride : 0;
     }
     UNLOCK();
 }

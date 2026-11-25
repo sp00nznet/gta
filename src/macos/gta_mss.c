@@ -15,6 +15,7 @@
  */
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <strings.h>
 #include <unistd.h>
 #include <pthread.h>
@@ -26,12 +27,14 @@
 #define MAX_MSS_STREAMS  4
 #define MAX_MSS_TIMERS   8
 
-/* Miles sample status (src/sound/miles_shim.h) */
-#define SMP_FREE      0
-#define SMP_DONE      1
-#define SMP_PLAYING   2
-#define SMP_STOPPED   3
-#define SMP_PAUSED    4
+/* Miles's own values (mss.h): bit flags, and the game compares them --
+ * GTA1 reads 4 as "playing", GTA2 reads 2 as "done". Miles has no paused
+ * status: a paused sample or stream reports stopped. */
+#define SMP_FREE      0x0001
+#define SMP_DONE      0x0002
+#define SMP_PLAYING   0x0004
+#define SMP_STOPPED   0x0008
+#define SMP_PAUSED    SMP_STOPPED
 
 typedef struct {
     int active;
@@ -42,6 +45,7 @@ typedef struct {
     int rate, bits, channels, is_signed;
     int volume, pan;
     int loop_count;
+    int32_t loop_start, loop_end;   /* AIL_set_sample_loop_block, bytes; end -1 = the end */
     int voice;               /* mixer voice, or -1 */
 } MSS_Sample;
 
@@ -56,6 +60,7 @@ typedef struct {
     void *pcm;               /* decoded WAV, owned */
     uint32_t pcm_bytes;
     uint32_t byte_rate;      /* bytes per second, from the WAV header */
+    int rate;                /* the playback rate, Hz (AIL_set_stream_playback_rate) */
     uint32_t dig_format;     /* DIG_F_*: bit 0 16-bit, bit 1 stereo */
 } MSS_Stream;
 
@@ -132,19 +137,28 @@ static void mss_AIL_ms_count(void) {
  * frequency asked for. A plain sleep(period)-then-fire loop accumulates the
  * callback's own cost into the period, and GTA's frame limiter is a spin on
  * this counter -- any drift lands on the frame pacing, and the picture
- * judders however fast the host is. */
+ * judders however fast the host is. The clock is in microseconds: GTA1 asks
+ * for 70 Hz and waits three ticks a frame in the city, and a period rounded
+ * up to whole milliseconds (15 ms, not 14.286) ran the game at 66.7 Hz, 5%
+ * slow -- 22.2 frames a second instead of the original 23.3. */
+static int64_t now_us(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+}
 static void *timer_thread(void *arg) {
     MSS_Timer *t = arg;
-    int64_t next = hle_ticks_ms() + (t->period_us + 999) / 1000;
+    int64_t next = now_us() + t->period_us;
     while (t->active) {
-        int64_t now = (int64_t)hle_ticks_ms();
+        int64_t now = now_us();
         if (next > now) {
-            usleep((useconds_t)(next - now) * 1000u);
+            struct timespec w = { (time_t)((next - now) / 1000000), (long)((next - now) % 1000000) * 1000 };
+            nanosleep(&w, NULL);
             continue;
         }
-        if (next < now - 1000) next = now;        /* the machine was held a long while: resynchronise */
+        if (next < now - 1000000) next = now;     /* the machine was held a long while: resynchronise */
         hle_call_guest(t->cb, 1, &t->user);
-        next += (t->period_us + 999) / 1000;
+        next += t->period_us > 0 ? t->period_us : 1000;
     }
     return NULL;
 }
@@ -264,6 +278,7 @@ static void sample_push(MSS_Sample *smp) {
     mixer_voice_set_volume(smp->voice, smp->volume);
     mixer_voice_set_pan(smp->voice, smp->pan);
     mixer_voice_set_loop(smp->voice, smp->loop_count);
+    mixer_voice_set_loop_block(smp->voice, smp->loop_start, smp->loop_end);
 }
 
 static void mss_AIL_allocate_sample_handle(void) {
@@ -271,7 +286,8 @@ static void mss_AIL_allocate_sample_handle(void) {
         if (!g_samples[i].active) {
             memset(&g_samples[i], 0, sizeof(MSS_Sample));
             g_samples[i].active = 1;
-            g_samples[i].status = SMP_FREE;
+            g_samples[i].status = SMP_DONE;      /* Miles: allocated, never started */
+            g_samples[i].loop_end = -1;
             g_samples[i].volume = 127;
             g_samples[i].pan = 64;
             g_samples[i].rate = 22050;
@@ -298,10 +314,11 @@ static void mss_AIL_release_sample_handle(void) {
 static void mss_AIL_init_sample(void) {
     MSS_Sample *smp = sample_get(A32(0));
     if (smp) {
-        smp->status = SMP_FREE;
+        smp->status = SMP_DONE;
         smp->data = NULL;
         smp->data_len = 0;
         smp->loop_count = 1;
+        smp->loop_start = 0, smp->loop_end = -1;
         if (smp->voice >= 0) mixer_voice_stop(smp->voice);
     }
     RET(0, 1);
@@ -396,6 +413,15 @@ static void mss_AIL_end_sample(void) {
     RET(0, 1);
 }
 
+static void mss_AIL_set_sample_loop_block(void) {     /* (sample, start offset, end offset) */
+    MSS_Sample *smp = sample_get(A32(0));
+    if (smp) {
+        smp->loop_start = (int32_t)A32(1), smp->loop_end = (int32_t)A32(2);
+        if (smp->voice >= 0) mixer_voice_set_loop_block(smp->voice, smp->loop_start, smp->loop_end);
+    }
+    RET(0, 3);
+}
+
 static void mss_AIL_sample_status(void) {
     MSS_Sample *smp = sample_get(A32(0));
     if (!smp) RET(SMP_FREE, 1);
@@ -434,6 +460,7 @@ static void mss_AIL_open_stream(void) {
                 if (g_streams[i].pcm) {
                     g_streams[i].pcm_bytes = nbytes;
                     g_streams[i].byte_rate = (uint32_t)(rate * (bits / 8) * chans);
+                    g_streams[i].rate = rate;
                     g_streams[i].dig_format = (bits == 16 ? 1u : 0u) | (chans == 2 ? 2u : 0u);
                     g_streams[i].voice = mixer_voice_alloc();
                     if (g_streams[i].voice >= 0)
@@ -547,7 +574,84 @@ static void mss_AIL_set_stream_position(void) {
     RET(0, 2);
 }
 
-/* The 38 imports, by their stdcall-decorated names. Registered before
+/* ---- GTA2's: stream time and rate, and Miles' 3D ------------------------ */
+
+static void mss_AIL_stream_volume(void) {
+    MSS_Stream *str = stream_get(A32(0));
+    RET(str ? (uint32_t)str->volume : 0, 1);
+}
+
+static void mss_AIL_stream_playback_rate(void) {
+    MSS_Stream *str = stream_get(A32(0));
+    RET(str ? (uint32_t)str->rate : 0, 1);
+}
+
+static void mss_AIL_set_stream_playback_rate(void) {
+    MSS_Stream *str = stream_get(A32(0));
+    if (str && (int32_t)A32(1) > 0) {
+        str->rate = (int)A32(1);
+        if (str->voice >= 0) mixer_voice_set_rate(str->voice, str->rate);
+    }
+    RET(0, 2);
+}
+
+static void mss_AIL_stream_ms_position(void) {            /* (stream, &total ms, &current ms) */
+    MSS_Stream *str = stream_get(A32(0));
+    uint32_t total = 0, cur = 0;
+    if (str && str->byte_rate) {
+        total = (uint32_t)((uint64_t)str->pcm_bytes * 1000u / str->byte_rate);
+        if (str->voice >= 0) cur = (uint32_t)((uint64_t)mixer_voice_position(str->voice) * 1000u / str->byte_rate);
+    }
+    if (A32(1)) MEM32(A32(1)) = total;
+    if (A32(2)) MEM32(A32(2)) = cur;
+    RET(0, 3);
+}
+
+static void mss_AIL_set_stream_ms_position(void) {        /* (stream, ms) */
+    MSS_Stream *str = stream_get(A32(0));
+    if (str && str->voice >= 0 && str->byte_rate) {
+        uint64_t at = (uint64_t)A32(1) * str->byte_rate / 1000u;
+        uint32_t align = str->byte_rate / (uint32_t)(str->rate > 0 ? str->rate : 1);
+        if (align) at -= at % align;
+        if (at < str->pcm_bytes) mixer_voice_seek(str->voice, (uint32_t)at);
+    }
+    RET(0, 2);
+}
+
+static void mss_AIL_delay(void) {                         /* in 60ths of a second */
+    uint32_t n = A32(0);
+    if (n > 600) n = 600;
+    hle_block_begin();
+    struct timespec ts = { (time_t)(n / 60), (long)(n % 60) * (1000000000L / 60) };
+    nanosleep(&ts, NULL);
+    hle_block_end();
+    RET(0, 1);
+}
+
+static void mss_AIL_digital_handle_release(void) { RET(1, 1); }
+static void mss_AIL_digital_handle_reacquire(void) { RET(1, 1); }
+
+/* Miles' 3D sound goes through a provider (A3D, EAX, DirectSound3D, its own
+ * software one). None is offered: a machine without one, which the game
+ * plays in stereo. The rest answers sanely in case one is asked for anyway. */
+static void mss_AIL_enumerate_3D_providers(void) {        /* (&next, &provider, &name) -> more? */
+    if (A32(1)) MEM32(A32(1)) = 0;
+    if (A32(2)) MEM32(A32(2)) = 0;
+    RET(0, 3);
+}
+static void mss_AIL_open_3D_provider(void) { RET(1, 1); }            /* M3D_NOTFOUND */
+static void mss_AIL_close_3D_provider(void) { RET(0, 1); }
+static void mss_AIL_3D_provider_attribute(void) { if (A32(2)) MEM32(A32(2)) = 0; RET(0, 3); }
+static void mss_AIL_set_3D_provider_preference(void) { RET(0, 3); }
+static void mss_AIL_allocate_3D_sample_handle(void) { RET(0, 1); }   /* none to give */
+static void mss_AIL_3D_sample_status(void) { RET(SMP_DONE, 1); }
+static void mss_3d_void1(void) { RET(0, 1); }
+static void mss_3d_void2(void) { RET(0, 2); }
+static void mss_3d_void3(void) { RET(0, 3); }
+static void mss_3d_void4(void) { RET(0, 4); }
+static void mss_3d_void5(void) { RET(0, 5); }
+
+/* The imports, by their stdcall-decorated names (GTA1's 38, GTA2's more). Registered before
  * win32hle's own mss module, so these win. */
 const win32hle_shim gta_mss_shims[] = {
     { "_AIL_allocate_sample_handle@4",        mss_AIL_allocate_sample_handle },
@@ -568,6 +672,7 @@ const win32hle_shim gta_mss_shims[] = {
     { "_AIL_set_digital_master_volume@8",     mss_AIL_set_digital_master_volume },
     { "_AIL_set_preference@8",                mss_AIL_set_preference },
     { "_AIL_set_sample_address@12",           mss_AIL_set_sample_address },
+    { "_AIL_set_sample_loop_block@12",        mss_AIL_set_sample_loop_block },
     { "_AIL_set_sample_loop_count@8",         mss_AIL_set_sample_loop_count },
     { "_AIL_set_sample_pan@8",                mss_AIL_set_sample_pan },
     { "_AIL_set_sample_playback_rate@8",      mss_AIL_set_sample_playback_rate },
@@ -588,5 +693,30 @@ const win32hle_shim gta_mss_shims[] = {
     { "_AIL_stream_status@4",                mss_AIL_stream_status },
     { "_AIL_waveOutClose@4",                  mss_AIL_waveOutClose },
     { "_AIL_waveOutOpen@16",                  mss_AIL_waveOutOpen },
+    { "_AIL_stream_volume@4",                 mss_AIL_stream_volume },
+    { "_AIL_stream_playback_rate@4",          mss_AIL_stream_playback_rate },
+    { "_AIL_set_stream_playback_rate@8",      mss_AIL_set_stream_playback_rate },
+    { "_AIL_stream_ms_position@12",           mss_AIL_stream_ms_position },
+    { "_AIL_set_stream_ms_position@8",        mss_AIL_set_stream_ms_position },
+    { "_AIL_delay@4",                         mss_AIL_delay },
+    { "_AIL_digital_handle_release@4",        mss_AIL_digital_handle_release },
+    { "_AIL_digital_handle_reacquire@4",      mss_AIL_digital_handle_reacquire },
+    { "_AIL_enumerate_3D_providers@12",       mss_AIL_enumerate_3D_providers },
+    { "_AIL_open_3D_provider@4",              mss_AIL_open_3D_provider },
+    { "_AIL_close_3D_provider@4",             mss_AIL_close_3D_provider },
+    { "_AIL_3D_provider_attribute@12",        mss_AIL_3D_provider_attribute },
+    { "_AIL_set_3D_provider_preference@12",   mss_AIL_set_3D_provider_preference },
+    { "_AIL_allocate_3D_sample_handle@4",     mss_AIL_allocate_3D_sample_handle },
+    { "_AIL_release_3D_sample_handle@4",      mss_3d_void1 },
+    { "_AIL_start_3D_sample@4",               mss_3d_void1 },
+    { "_AIL_end_3D_sample@4",                 mss_3d_void1 },
+    { "_AIL_3D_sample_status@4",              mss_AIL_3D_sample_status },
+    { "_AIL_set_3D_sample_loop_count@8",      mss_3d_void2 },
+    { "_AIL_set_3D_sample_loop_block@12",     mss_3d_void3 },
+    { "_AIL_set_3D_sample_playback_rate@8",   mss_3d_void2 },
+    { "_AIL_set_3D_sample_volume@8",          mss_3d_void2 },
+    { "_AIL_set_3D_sample_info@8",            mss_3d_void2 },
+    { "_AIL_set_3D_position@16",              mss_3d_void4 },
+    { "_AIL_set_3D_sample_float_distances@20", mss_3d_void5 },
     { 0, 0 }
 };

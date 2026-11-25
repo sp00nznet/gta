@@ -64,6 +64,7 @@ if(APPLE)
     list(FILTER GTA1_RECOMP_SOURCES EXCLUDE REGEX "recomp_part\\.c$")
     add_executable(gta1
         src/macos/main.c
+        src/macos/gta_keys.c
         src/macos/gta_hooks.c
         src/macos/gta_menu.c
         src/macos/gta_mixer.c
@@ -115,6 +116,7 @@ if(APPLE)
         add_executable(gta2
             src/macos/gta2_main.c
             src/macos/gta2_dispatch.c
+            src/macos/gta_keys.c
             src/macos/gta_hooks.c
             src/macos/gta_mixer.c
             src/macos/gta_mss.c

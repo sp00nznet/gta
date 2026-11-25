@@ -52,11 +52,18 @@ beside the program. A controller maps to the game's keys: the stick and
 dpad steer, A is the vehicle, B attacks, X brakes, Y is special, the
 shoulders change weapon, Start is Esc.
 
-Frame pacing: the game's own cadence is ~26.7 frames a second in the front
-end and ~22 in the city, at any resolution (the engine's, not the host's;
-the render is far faster than a frame). The presenter holds each frame
-about 48 ms so the display follows the game's rhythm instead of alternating
-2 and 3 vsync holds -- `--pacing all` shows every flip the moment it lands.
+Frame pacing: the city runs at 23.3 frames a second and the front end at
+~27, by the game's own design. Two limiters stack: `Sleep(35 - elapsed)`
+from `_ftime` each frame (28.6 at most), and in the city a spin until a
+70 Hz Miles timer has ticked three times (70 / 3 = 23.3). The host's timer
+keeps time in microseconds; rounded up to whole milliseconds it ran at
+66.7 Hz and the whole game 5% slow. The game draws a frame into the
+primary in more than one pass (the city, then the HUD), so presenting each
+write showed half-drawn frames as a flicker; the default `--pacing even`
+shows one complete frame per game frame (measured: every 42-43 ms in the
+city), and `--pacing all` shows every write the moment it lands. On a
+60 Hz display a 23.3 fps frame lasts two or three refreshes -- the 1997
+game's own cadence, the Windows build's as well.
 
 An overlay folder (`macos-overlay`, beside the game folder, written by the
 host if there is none) answers the two file probes the game makes that the
@@ -80,6 +87,41 @@ file is never read, only found.
 Known gaps: the quit path can fault in MGL's teardown after the game has
 already exited (exit code 3, cosmetic); a network game against a Windows
 player is untried; GTA: London is not lifted here yet.
+
+## GTA2
+
+The freeware `gta2.exe` (1999) runs on the same host: its own lift
+(`src/recomp/gen_gta2`) with its video layer `dmavideo.dll` and its renderer
+`d3ddll.dll` lifted beside it and merged into one dispatch
+(`tools/merge_dispatch_gta2.py`). It renders through Direct3D 6 -- win32hle's
+`d3d.c`, rasterised in software -- at the game's own 30 frames a second.
+
+```
+python3 tools/lift.py gta2-game/extracted/gta2.exe src/recomp/gen_gta2
+python3 tools/patch_gen_gta2.py
+./build-macos.sh
+build-macos/bin/gta2 --run                 # gta2-game/extracted by default
+```
+
+Intro (Bink, with sound), menu, and the city: walking, traffic, HUD, the
+menu music and the game's sounds through the Miles mixer (Miles 3D answers
+"no provider", so the game mixes in stereo). What it took past the intro:
+
+- `IDirect3D3::EnumDevices` lists RGB Emulation before the HAL, as Windows
+  does: d3ddll asks for "the second device its callback accepted", and
+  with the HAL alone it never created its device.
+- Miles' status values are its own bit flags (`SMP_DONE` 2, `SMP_PLAYING`
+  4): GTA2 restarted its menu music every frame on reading "playing" as
+  "done", and GTA1 never saw a sound as playing.
+- The lifter's `pushaw`/`popaw`: GTA2 reads the TSC between the two, and
+  without them its stores landed on the caller's saved registers -- the
+  garbage pointer the level's object walk faulted on.
+
+Bring-up levers, both hosts: `GTA_KEYS="15:enter,19:enter,40:up*3"` plays a
+key script (seconds from launch, `*S` holds a key S seconds; `--autotap S`
+is one Enter), `GTA_SHOTS=DIR` writes each sampled frame as a PPM,
+`HLE_D3DFPS=1` prints the Direct3D scene rate, `--calltrace FILE` every
+function entered.
 
 ## Why MGL works here
 

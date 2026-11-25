@@ -32,6 +32,7 @@
 #include <SDL2/SDL.h>
 
 #include "win32hle.h"
+#include "gta_keys.h"
 #include "pe_loader.h"
 #include "host.h"
 
@@ -55,8 +56,10 @@ void gta_pad_pump(void);
 #define GTA_EXE_NAME   "WINO\\Grand Theft Auto.exe"
 
 static int g_headless, g_fullscreen = -1;   /* -1: as the settings say */
-static int g_pacing_even = 1;                /* the default: hold each frame ~48 ms, a steady cadence
-                                             * (--pacing all shows every flip the moment it lands) */
+static int g_pacing_even = 1;                /* the default: one present per game frame -- the game writes
+                                             * the primary in passes (city, then HUD), and a flip under
+                                             * 48 ms after the last one shown waits for the pump, which
+                                             * shows the finished frame (--pacing all: every write) */
 static unsigned g_watchdog_s;
 extern int win32hle_trace;
 
@@ -170,6 +173,21 @@ static uint32_t checksum(const uint8_t *px, int w, int h, int pitch, int bpp) {
     return sum;
 }
 static uint32_t g_last_seq, g_seq_per_s, g_seq_tick;
+/* What reached the screen: presents a second, and of them the distinct game
+ * frames (a frame the game flipped but the presenter never showed is lost to
+ * the eye). The frame hook runs on each present. */
+static uint32_t g_shown_per_s, g_distinct_per_s, g_shown_seq_last = ~0u;
+static void count_shown(const uint8_t *px, int w, int h, int pitch, int bpp) {
+    (void)px, (void)w, (void)h, (void)pitch, (void)bpp;
+    unsigned seq = 0;
+    const uint8_t *p; const uint32_t *pal; int a, b, c, d;
+    g_shown_per_s++;
+    static int log_iv = -1;
+    static uint32_t last_at;
+    if (log_iv < 0) log_iv = getenv("GTA_PRESENT_LOG") != NULL;
+    if (log_iv) { uint32_t now = hle_ticks_ms(); if (last_at) fprintf(stderr, "[present] +%u\n", now - last_at); last_at = now; }
+    if (hle_dd_frame(&p, &a, &b, &c, &d, &pal, &seq) && seq != g_shown_seq_last) g_distinct_per_s++, g_shown_seq_last = seq;
+}
 static uint32_t g_seq_last_at, g_seq_max_gap;   /* pacing: the worst gap between two flips, in ms */
 
 /* Quit from the window's close button or Cmd+Q is SDL_QUIT, which the
@@ -214,14 +232,16 @@ static void frame_pump(void) {
         g_last_seq = seq, g_seq_per_s++;
     }
     if (now - g_seq_tick >= 1000) {
-        fprintf(stderr, "[perf] %u game frames/s, worst gap %u ms%s\n",
-                g_seq_per_s, g_seq_max_gap, g_seq_per_s && g_seq_max_gap > 60 ? "  <-- judder" : "");
-        g_seq_tick = now, g_seq_per_s = 0, g_seq_max_gap = 0;
+        fprintf(stderr, "[perf] %u game frames/s, worst gap %u ms, %u of them shown (%u presents)%s\n",
+                g_seq_per_s, g_seq_max_gap, g_distinct_per_s, g_shown_per_s,
+                g_seq_per_s && g_seq_max_gap > 60 ? "  <-- judder" : "");
+        g_seq_tick = now, g_seq_per_s = 0, g_seq_max_gap = 0, g_shown_per_s = 0, g_distinct_per_s = 0;
     }
     if ((int32_t)(now - next) < 0 || !hle_dd_frame(&px, &w, &h, &pitch, &bpp, &pal, NULL)) return;
     next = now + 3333;
     fprintf(stderr, "[host] frame %ld checksum %08X (%dx%dx%d)\n",
-            g_shown++, checksum(px, w, h, pitch, bpp), w, h, bpp);
+            g_shown, checksum(px, w, h, pitch, bpp), w, h, bpp);
+    gta_shoot(px, w, h, pitch, bpp, pal, g_shown++);
 }
 
 /* ---- main -------------------------------------------------------------- */
@@ -400,6 +420,7 @@ int main(int argc, char **argv) {
     if (g_fullscreen > 0) g_rm.fullscreen = 1;   /* the command line wins over the ini */
     if (hle_screen_open("Grand Theft Auto", g_rm.fullscreen, g_headless) != 0) return 1;
     hle_set_pump_hook(frame_pump);
+    if (!hle_screen_frame_hook) hle_screen_frame_hook = count_shown;
     gta_pad_start();                      /* a controller maps to the game's keys */
     if (g_pacing_even) {
         s_show_frame = hle_dd_primary_hook;      /* screen.c's: the picture (NULL headless) */
@@ -414,6 +435,7 @@ int main(int argc, char **argv) {
         pthread_create(&t, NULL, watchdog, NULL);
         pthread_detach(t);
     }
+    gta_keys_start(0);                    /* GTA_KEYS: a bring-up run's key script */
     printf("  entering 0x%08X\n\n", entry_va);
     fflush(stdout);
     uint32_t rc = hle_call_guest(entry_va, 0, NULL);

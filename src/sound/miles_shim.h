@@ -24,12 +24,14 @@ typedef void *HSTREAM;         /* Stream handle */
 typedef void *HTIMER;          /* Timer handle */
 typedef void *HPROVIDER;       /* Provider handle */
 
-/* Stream status values */
-#define SMP_FREE      0
-#define SMP_DONE      1
-#define SMP_PLAYING   2
-#define SMP_STOPPED   3
-#define SMP_PAUSED    4
+/* Miles's own values (mss.h): bit flags, and the game compares them --
+ * GTA1 reads 4 as "playing", GTA2 reads 2 as "done". Miles has no paused
+ * status: a paused sample or stream reports stopped. */
+#define SMP_FREE      0x0001
+#define SMP_DONE      0x0002
+#define SMP_PLAYING   0x0004
+#define SMP_STOPPED   0x0008
+#define SMP_PAUSED    SMP_STOPPED
 
 /* --- Core lifecycle --- */
 u32  AIL_startup(void);
