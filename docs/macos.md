@@ -57,13 +57,20 @@ Frame pacing: the city runs at 23.3 frames a second and the front end at
 from `_ftime` each frame (28.6 at most), and in the city a spin until a
 70 Hz Miles timer has ticked three times (70 / 3 = 23.3). The host's timer
 keeps time in microseconds; rounded up to whole milliseconds it ran at
-66.7 Hz and the whole game 5% slow. The game draws a frame into the
-primary in more than one pass (the city, then the HUD), so presenting each
-write showed half-drawn frames as a flicker; the default `--pacing even`
-shows one complete frame per game frame (measured: every 42-43 ms in the
-city), and `--pacing all` shows every write the moment it lands. On a
-60 Hz display a 23.3 fps frame lasts two or three refreshes -- the 1997
-game's own cadence, the Windows build's as well.
+66.7 Hz and the whole game 5% slow.
+
+MGL flips by page: `Flip(page 1)`, then -- having drawn the next frame
+straight into the front -- `Flip(page 0)`, the primary, which is already
+showing. win32hle's Flip ignored the target and swapped every time, so
+every other frame the page from two frames before came back on screen:
+the picture stepping back and forth, the camera seeming slow and
+flickering (frames captured from the game's memory went A, X, A, Y, A...).
+Flip honours its target now. And in the city the host sleeps through the
+limiter's spin (a core's worth of CPU) and presents the finished frame the
+moment it ends -- complete, on the game's clock (`--pacing frame`, the
+default; `even` presents at the flip or the next pump, `all` every write).
+On a 60 Hz display a 23.3 fps frame lasts two or three refreshes, five or
+six at 120 Hz -- the 1997 game's own cadence.
 
 An overlay folder (`macos-overlay`, beside the game folder, written by the
 host if there is none) answers the two file probes the game makes that the

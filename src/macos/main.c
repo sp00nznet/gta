@@ -238,7 +238,9 @@ static void frame_pump(void) {
         g_seq_tick = now, g_seq_per_s = 0, g_seq_max_gap = 0, g_shown_per_s = 0, g_distinct_per_s = 0;
     }
     if ((int32_t)(now - next) < 0 || !hle_dd_frame(&px, &w, &h, &pitch, &bpp, &pal, NULL)) return;
-    next = now + 3333;
+    static int every = -1;                /* GTA_SHOT_EVERY=MS: sample faster (a run of frames for a look) */
+    if (every < 0) every = getenv("GTA_SHOT_EVERY") ? atoi(getenv("GTA_SHOT_EVERY")) : 0;
+    next = now + (every > 0 ? (uint32_t)every : 3333u);
     fprintf(stderr, "[host] frame %ld checksum %08X (%dx%dx%d)\n",
             g_shown, checksum(px, w, h, pitch, bpp), w, h, bpp);
     gta_shoot(px, w, h, pitch, bpp, pal, g_shown++);
@@ -274,7 +276,12 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--fullscreen")) g_fullscreen = 1;
         else if (!strcmp(argv[i], "--classic")) g_rm.classic = 1;
         else if (!strcmp(argv[i], "--mute")) hle_dsound_set_master(0.0f);
-        else if (!strcmp(argv[i], "--pacing") && i + 1 < argc) g_pacing_even = strcmp(argv[++i], "all") != 0;
+        else if (!strcmp(argv[i], "--pacing") && i + 1 < argc) {
+            const char *m = argv[++i];
+            extern int gta_present_at_frame;
+            g_pacing_even = strcmp(m, "all") != 0;                       /* all: every write, at once */
+            gta_present_at_frame = strcmp(m, "even") != 0 && strcmp(m, "all") != 0;   /* frame, the default */
+        }
         else if (!strcmp(argv[i], "--scale") && i + 1 < argc) scale = argv[++i];
         else if (!strcmp(argv[i], "--res") && i + 1 < argc) {
             if (sscanf(argv[++i], "%dx%d", &g_rm.res_w, &g_rm.res_h) != 2)
@@ -288,7 +295,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--trace")) win32hle_trace = 1;
         else {
             printf("usage: gta1 [--run] [--headless | --fullscreen] [--scale sharp|smooth|crt|nearest|integer]\n"
-                   "            [--res WxH] [--view 25..100] [--classic] [--pacing even|all] [--game DIR]\n"
+                   "            [--res WxH] [--view 25..100] [--classic] [--pacing frame|even|all] [--game DIR]\n"
                    "            [--join ADDR[:PORT]] [--port N] [--mute] [--watchdog S] [--trace]\n"
                    "\n"
                    "--game DIR is the game's install root: the folder holding WINO and GTADATA\n"

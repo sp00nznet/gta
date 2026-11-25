@@ -29,6 +29,10 @@ HOOKS = {   # function -> the line put at its top (GTA1 addresses)
     'sub_00414CC0': 'extern void hires_on_change_mode(void); hires_on_change_mode();',
     # set the mission number: --coop plays a network game on the campaign (src/net/coop.c)
     'sub_0044AB50': 'extern void coop_on_set_mission(void); coop_on_set_mission();',
+    # the city's frame limiter, a spin on a 70 Hz timer's count: the macOS
+    # host sleeps through it and presents the finished frame on its boundary
+    # (src/macos/gta_hooks.c); the Windows host answers 0, the loop runs as is.
+    'sub_0047DC80': 'extern int gta_frame_wait(void); if (gta_frame_wait()) { g_esp += 4; return; }',
 }
 
 LINES = {   # instruction address -> its replacement

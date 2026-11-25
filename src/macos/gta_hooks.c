@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <time.h>
 
 #include "win32hle.h"   /* pulls recomp_types.h: g_esp, MEM*, hle_alloc */
 
@@ -142,6 +143,36 @@ uint32_t hires_view_width(uint32_t v) {
     if (!s_on || !h) return w;
     MEM8(v + 0x2C) = 0;                          /* square pixels */
     return (uint32_t)(((uint64_t)h * 4 * (uint64_t)g_rm.view) / 300);
+}
+
+/* ---- the frame boundary ---------------------------------------------------
+ *
+ * sub_0047DC80(n), the city's frame limiter: a spin until a 70 Hz Miles timer
+ * (0x47DC70 counts into 0x775580) has ticked n times -- three a frame, 23.3
+ * frames a second -- then the count back to zero. Here the wait sleeps
+ * instead of spinning a core, and the finished frame is presented the moment
+ * it ends: every frame shown complete (the game writes the primary in passes,
+ * the city then the HUD) and on the game's own clock. Presented wherever a
+ * flip or the message pump happened to land, a screen recording showed the
+ * frames 33, 42, 50 and 58 ms apart for a steady 42.9 -- the camera's judder.
+ * The front end does not come here (0x502F34 is the city's flag) and keeps
+ * the presenter's own pacing. --pacing even or all turn this off. */
+int gta_present_at_frame = 1;
+int gta_frame_wait(void) {
+    uint32_t n = MEM32(g_esp + 4);
+    if (!MEM8(0x502F34) || !MEM32(0x775584)) return 0;   /* the original returns at once */
+    hle_block_begin();                           /* the timer's thread runs guest code: let it */
+    while (MEM32(0x775580) < n) {
+        struct timespec ts = { 0, 250000 };
+        nanosleep(&ts, NULL);
+    }
+    hle_block_end();
+    MEM32(0x775580) = 0;
+    if (gta_present_at_frame) {
+        hle_screen_hold(250);                    /* flips and the pump leave the screen to us */
+        hle_screen_present();
+    }
+    return 1;
 }
 
 /* ---- engine hooks (src/engine/recomp_runtime.c) ------------------------ */
