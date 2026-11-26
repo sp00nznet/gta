@@ -42,6 +42,7 @@ endif()
 
 # --- GTA1 target ---
 if(APPLE)
+    enable_language(OBJC)    # win32hle's d3d_metal.m, GTA2's Direct3D on the GPU
     # Native macOS: the lifted C on pcrecomp's runtime/win32hle, a 64-bit
     # arm64 host (RECOMP_MEM_BASE: the guest's 4 GB is one block of the
     # host's memory). Every Win32 import is answered by win32hle itself.
@@ -123,6 +124,7 @@ if(APPLE)
             src/macos/gta_mss.c
             src/macos/gta_net.c
             src/macos/gta_pad.c
+            ${HLE}/d3d_metal.m
             ${HLE_SOURCES}
             ${GTA2_RECOMP_SOURCES}
             ${DMAVIDEO_RECOMP_SOURCES}
@@ -140,7 +142,12 @@ if(APPLE)
             target_compile_definitions(gta2 PRIVATE HLE_WITH_FFMPEG)
             target_link_libraries(gta2 PRIVATE PkgConfig::FFMPEG)
         endif()
-        target_link_libraries(gta2 PRIVATE PkgConfig::SDL2 PkgConfig::SDL2_TTF pthread m)
+        target_link_libraries(gta2 PRIVATE PkgConfig::SDL2 PkgConfig::SDL2_TTF pthread m
+            "-framework Metal" "-framework Foundation")
+        # Direct3D on the GPU (win32hle's d3d_metal.m): GTA2 at 1080p and
+        # above is past what the software rasteriser fills at 30 a second.
+        # The file manages its own memory (no ARC).
+        set_source_files_properties(${HLE}/d3d_metal.m PROPERTIES COMPILE_FLAGS "-fno-objc-arc")
         set_target_properties(gta2 PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
             OUTPUT_NAME gta2)

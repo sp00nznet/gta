@@ -109,9 +109,9 @@ static void save_all(void) {
     ini_set("present", "scale", scale);
     ini_set("present", "fullscreen", full ? "1" : "0");
     char v[16];
+    snprintf(v, sizeof v, "%dx%d", g_rm.res_w, g_rm.res_h);
+    ini_set("game", "res", v);
     if (!g_gta2) {
-        snprintf(v, sizeof v, "%dx%d", g_rm.res_w, g_rm.res_h);
-        ini_set("game", "res", v);
         snprintf(v, sizeof v, "%d", g_rm.view);
         ini_set("game", "view", v);
     }
@@ -159,17 +159,15 @@ static void menu_open(void) {
         hle_screen_settings(&bars, &full);
         g_main[n].label = "Fullscreen"; g_main[n].hint = "F11";
         g_main[n].id = ID_FULL, g_main[n].checked = full, n++; }
-    for (int k = 0; k < NRES && !g_gta2; k++) {
+    for (int k = 0; k < NRES; k++) {
         snprintf(g_res_label[k], sizeof g_res_label[k], "%d x %d%s",
                  k_res[k].w, k_res[k].h, k < 4 ? "" : " (widescreen)");
         g_res[k].label = g_res_label[k];
         g_res[k].id = ID_RES + k;
         g_res[k].checked = g_rm.res_w == k_res[k].w && g_rm.res_h == k_res[k].h;
     }
-    if (!g_gta2) {
-    g_main[n].label = "Resolution"; g_main[n].hint = "next game";
+    g_main[n].label = "Resolution"; g_main[n].hint = g_gta2 ? "next start" : "next game";
     g_main[n].sub = g_res, g_main[n].nsub = NRES, g_main[n].id = 0, n++;
-    }
     for (int k = 0; k < 5 && !g_gta2; k++) {
         snprintf(g_view_label[k], sizeof g_view_label[k], k_views[k] == 100 ? "100%% (original)" : "%d%% zoom out", k_views[k]);
         g_view[k].label = g_view_label[k];
@@ -197,7 +195,8 @@ static int menu_key(int sdl_scancode, int down) {
     return 0;
 }
 
-/* GTA2's menu (gta2_main.c): gta2-macos.ini, scaling, fullscreen and sound. */
+/* GTA2's menu (gta2_main.c): gta2-macos.ini; scaling, fullscreen, the
+ * resolution (GTA2 takes it as it starts) and sound. */
 void gta_menu_start_gta2(void);
 
 void gta_menu_start(void) {
@@ -210,7 +209,7 @@ void gta_menu_start(void) {
             for (int k = 0; k < SCALE_COUNT; k++) if (!strcasecmp(v, k_scale[k])) g_rm.scale = k;
         }
         if (ini_get("present", "fullscreen", v, sizeof v) && !strcmp(v, "1")) g_rm.fullscreen = 1;
-        if (!g_gta2 && ini_get("game", "res", v, sizeof v)) {
+        if (ini_get("game", "res", v, sizeof v)) {
             int w, h;
             if (sscanf(v, "%dx%d", &w, &h) == 2 && w >= 640 && h >= 480) g_rm.res_w = w, g_rm.res_h = h;
         }

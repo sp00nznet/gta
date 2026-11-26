@@ -20,6 +20,7 @@ cmake-build-*/
 
 # Game files (user-supplied, copyrighted)
 game/
+game
 assets/
 *.zip
 *.iso
@@ -63,4 +64,5 @@ macos-overlay/
 repack-extracted/
 GTA2INSTALLER/
 gta2-game/
+Grand Theft Auto (Repack) v2/
 *.cab

@@ -250,7 +250,7 @@ that were confidently wrong.
 | Grand Theft Auto | 1997 | `gtawin.exe` (original) | MSVC 4.2 | Analyzed |
 | GTA London 1969 | 1999 | `gta_uk.exe` | MSVC 5.1 | **Playable** |
 | GTA London 1961 | 1999 | `GTA_61.exe` | MSVC 5.1 | Analyzed |
-| Grand Theft Auto 2 | 1999 | `gta2.exe` | MSVC 5.1 | Unwrapped and lifted (its own repo, in progress) |
+| Grand Theft Auto 2 | 1999 | `gta2.exe` | MSVC 5.1 | **Playable** (freeware build, the macOS host) |
 
 All of these share the **Race'n'Chase** engine, written by Mike Dailly at DMA
 Design. GTA1 and London run the identical engine -- London is a mission pack.

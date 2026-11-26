@@ -129,7 +129,12 @@ The freeware `gta2.exe` (1999) runs on the same host: its own lift
 (`src/recomp/gen_gta2`) with its video layer `dmavideo.dll` and its renderer
 `d3ddll.dll` lifted beside it and merged into one dispatch
 (`tools/merge_dispatch_gta2.py`). It renders through Direct3D 6 -- win32hle's
-`d3d.c`, rasterised in software -- at the game's own 30 frames a second.
+`d3d.c`, on the GPU through `d3d_metal.m` (Metal; without a Metal device, or
+with `GTA2_SOFTWARE_D3D=1`, it rasterises in software) -- at the game's own 30
+frames a second. The resolution is the GTA2 Manager's, as on Windows: the
+registry's `Screen\full_width` and `full_height`, seeded from `--res WxH`, else
+F10's Resolution (remembered in `gta2-macos.ini`), else 1920x1080. The software
+rasteriser fills 1080p at ~20 frames a second; the GPU holds the full 30.
 
 ```
 python3 tools/lift.py gta2-game/extracted/gta2.exe src/recomp/gen_gta2
@@ -163,8 +168,9 @@ jump and handbrake, Z/X weapons, Tab, Alt and right Shift the specials), and
 a controller on them as GTA1's: the stick and dpad steer, A/cross the
 vehicle, B/circle attacks, X/square jumps, Y/triangle special, the shoulders
 change weapon, the triggers are Specials 2 and 3, Start/Options is Esc, a
-DualSense's touchpad the menu. F10 (fn+F10, Cmd+M): scaling, fullscreen and
-sound, remembered in `gta2-macos.ini` beside the program.
+DualSense's touchpad the menu. F10 (fn+F10, Cmd+M): scaling, fullscreen, the
+resolution (taken as the game starts) and sound, remembered in
+`gta2-macos.ini` beside the program.
 
 Bring-up levers, both hosts: `GTA_KEYS="15:enter,19:enter,40:up*3"` plays a
 key script (seconds from launch, `*S` holds a key S seconds; `--autotap S`

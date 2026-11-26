@@ -47,7 +47,9 @@ extern const win32hle_shim gta_net_shims[];
 #define GTA2_EXE_NAME   "gta2.exe"
 
 static int g_headless, g_fullscreen = -1;   /* -1: as the settings say */
+static int g_res_w, g_res_h;                 /* --res */
 void gta_menu_start_gta2(void);
+int  hle_d3d_metal_enable(void);   /* win32hle's d3d_metal.m */
 void gta_pad_profile_gta2(void);
 void gta_pad_start(void);
 void gta_pad_pump(void);
@@ -277,40 +279,6 @@ static void gta2_GetKeyboardLayoutNameA(void) {
     RET(1, 1);
 }
 
-/* Miles 3D, answered as "no provider": enumerate_3D_providers calls its
- * callback with none, and the game's positional sounds fall back to the 2D
- * digital driver that already works. The others answer with the arities
- * their @N decorations say (N bytes of arguments), so nothing
- * desynchronises if one is reached. */
-static void mss3d_enumerate(void) { RET(0 /* none found */, 3); }
-static void mss3d_open(void)      { RET(0 /* no provider to open */, 1); }
-static void mss3d_a1(void)        { RET(0, 1); }
-static void mss3d_a2(void)         { RET(0, 2); }
-static void mss3d_a3(void)        { RET(0, 3); }
-static void mss3d_a4(void)        { RET(0, 4); }
-static void mss3d_a5(void)        { RET(0, 5); }
-
-static const win32hle_shim g_gta2_mss3d_shims[] = {
-    { "_AIL_enumerate_3D_providers@12",        mss3d_enumerate },
-    { "_AIL_3D_provider_attribute@12",         mss3d_a3 },
-    { "_AIL_3D_sample_status@4",               mss3d_a1 },
-    { "_AIL_allocate_3D_sample_handle@4",      mss3d_a1 },
-    { "_AIL_close_3D_provider@4",             mss3d_a1 },
-    { "_AIL_end_3D_sample@4",                  mss3d_a1 },
-    { "_AIL_open_3D_provider@4",               mss3d_open },
-    { "_AIL_release_3D_sample_handle@4",       mss3d_a1 },
-    { "_AIL_set_3D_position@16",               mss3d_a4 },
-    { "_AIL_set_3D_provider_preference@12",    mss3d_a3 },
-    { "_AIL_set_3D_sample_float_distances@20", mss3d_a5 },
-    { "_AIL_set_3D_sample_info@8",             mss3d_a2 },
-    { "_AIL_set_3D_sample_loop_block@12",      mss3d_a3 },
-    { "_AIL_set_3D_sample_loop_count@8",       mss3d_a2 },
-    { "_AIL_set_3D_sample_playback_rate@8",    mss3d_a2 },
-    { "_AIL_set_3D_sample_volume@8",          mss3d_a2 },
-    { "_AIL_start_3D_sample@4",                mss3d_a1 },
-    { 0, 0 }
-};
-
 /* BinkGetSummary(bink, buf): a short text about the movie, into the game's
  * buffer. BinkOpenMiles(hMSS): route the movie's sound through Miles --
  * bink.c already plays it through DirectSound, so a no-op that says yes.
@@ -331,6 +299,12 @@ static void gta2_registry_seed(void) {
     hle_reg_set_string(0x80000002u, "SOFTWARE\\DMA Design Ltd\\GTA2\\Screen", "videoname", "dmavideo.dll");
     hle_reg_set_string(0x80000002u, "SOFTWARE\\DMA Design Ltd\\GTA2\\Screen", "rendername", "d3ddll.dll");
     hle_reg_set_dword(0x80000002u, "SOFTWARE\\DMA Design Ltd\\GTA2\\Screen", "videodevice", 0);
+    /* The resolution: GTA2 reads its fullscreen mode here as it starts (the
+     * GTA2 Manager's choice), and dmavideo and d3ddll take any size the
+     * display lists -- widescreen and 4K included, the HUD to its corners.
+     * --res, else the menu's (gta2-macos.ini), else 1920x1080. */
+    hle_reg_set_dword(0x80000002u, "SOFTWARE\\DMA Design Ltd\\GTA2\\Screen", "full_width", (uint32_t)g_rm.res_w);
+    hle_reg_set_dword(0x80000002u, "SOFTWARE\\DMA Design Ltd\\GTA2\\Screen", "full_height", (uint32_t)g_rm.res_h);
     /* "3D Sound", the GTA2 Manager's box: the world's sounds through Miles'
      * DirectSound3D provider (gta_mss.c's, in software) -- positioned,
      * fading with distance -- rather than the thinner stereo fallback. */
@@ -485,12 +459,18 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--fullscreen")) g_fullscreen = 1;
         else if (!strcmp(argv[i], "--mute")) hle_dsound_set_master(0.0f);
         else if (!strcmp(argv[i], "--scale") && i + 1 < argc) scale = argv[++i];
+        else if (!strcmp(argv[i], "--res") && i + 1 < argc) {
+            if (sscanf(argv[++i], "%dx%d", &g_res_w, &g_res_h) != 2 || g_res_w < 640 || g_res_h < 480) {
+                fprintf(stderr, "--res WxH, at least 640x480 (the original)\n");
+                return 1;
+            }
+        }
         else if (!strcmp(argv[i], "--game") && i + 1 < argc) game = argv[++i];
         else if (!strcmp(argv[i], "--watchdog") && i + 1 < argc) g_watchdog_s = (unsigned)strtoul(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--autotap") && i + 1 < argc) g_autotap = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--trace")) win32hle_trace = 1;
         else {
-            printf("usage: gta2 [--run] [--headless | --fullscreen] [--scale sharp|smooth|crt|nearest|integer]\n"
+            printf("usage: gta2 [--run] [--headless | --fullscreen] [--scale sharp|smooth|crt|nearest|integer] [--res WxH]\n"
                    "            [--game DIR] [--mute] [--watchdog S] [--trace]\n"
                    "\n"
                    "--game DIR is the game's install folder (default ./gta2-game/extracted).\n");
@@ -540,10 +520,8 @@ int main(int argc, char **argv) {
         }
     }
     win32hle_register(gta_mss_shims);    /* GTA1's Miles answers: the shared names */
-    win32hle_register(g_gta2_mss3d_shims); /* GTA2's Miles 3D, as "no provider" */
     win32hle_register(gta_net_shims);    /* DirectPlayCreate (ordinal 1) */
     hle_com_register_class(CLSID_DirectMusic, dmusic_create);   /* the version check's last gate */
-    gta2_registry_seed();                                       /* the software renderer, until Direct3D's menu bring-up */
     recomp_host_init();
     printf("Grand Theft Auto 2 recomp host (native macOS)\n  lifted functions in dispatch: %u\n", recomp_dispatch_count);
 
@@ -567,7 +545,15 @@ int main(int argc, char **argv) {
 
     if (chdir(game_full) != 0) { fprintf(stderr, "cannot enter %s\n", game_full); return 1; }
 
+    g_rm.res_w = 1920, g_rm.res_h = 1080;   /* the default, as GTA1's here */
     gta_menu_start_gta2();               /* gta2-macos.ini's settings, and F10 */
+    if (g_res_w) g_rm.res_w = g_res_w, g_rm.res_h = g_res_h;   /* --res wins, this run */
+    fprintf(stderr, "[host] GTA2 at %dx%d (--res, or F10's Resolution for the next start)\n", g_rm.res_w, g_rm.res_h);
+    gta2_registry_seed();                /* the Manager's settings: renderer, 3D sound, resolution */
+    /* Direct3D on the GPU (win32hle's d3d_metal.m) unless GTA2_SOFTWARE_D3D:
+     * at 1080p the software rasteriser fills ~18 frames a second, not 30.
+     * Without a Metal device it falls back to software by itself. */
+    if (!getenv("GTA2_SOFTWARE_D3D")) hle_d3d_metal_enable();
     if (scale && !hle_screen_scale(scale))
         fprintf(stderr, "[host] no scaling \"%s\": sharp, smooth, crt, nearest or integer\n", scale);
     int full = g_fullscreen > 0 || (g_fullscreen < 0 && g_rm.fullscreen);
