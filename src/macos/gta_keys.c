@@ -56,7 +56,8 @@ static void tap(int vk, int scan, const char *name, double hold) {
 
 /* GTA_KEYS="15:enter,17.5:down,19:enter,30:up*3": a key script for bring-up
  * runs, the time in seconds from launch, *S to hold the key S seconds. Names:
- * enter esc space up down left right tab ctrl shift backspace, or a letter or
+ * enter esc space up down left right tab ctrl shift backspace lctrl lalt rshift,
+ * or a letter or
  * digit. --autotap S is GTA_KEYS="S:enter". */
 static int g_autotap;
 static void *autotap_thread(void *arg) {
@@ -64,6 +65,7 @@ static void *autotap_thread(void *arg) {
         { "enter", 0x0D, 0x1C }, { "esc", 0x1B, 0x01 }, { "space", 0x20, 0x39 }, { "tab", 0x09, 0x0F },
         { "up", 0x26, 0x48 }, { "down", 0x28, 0x50 }, { "left", 0x25, 0x4B }, { "right", 0x27, 0x4D },
         { "ctrl", 0x11, 0x1D }, { "shift", 0x10, 0x2A }, { "backspace", 0x08, 0x0E },
+        { "lctrl", 0xA2, 0x1D }, { "lalt", 0xA4, 0x38 }, { "rshift", 0xA1, 0x36 },
     };
     static const char row_scan[] = "1234567890QWERTYUIOPASDFGHJKLZXCVBNM";
     static const int row_code[] = { 2,3,4,5,6,7,8,9,10,11, 16,17,18,19,20,21,22,23,24,25, 30,31,32,33,34,35,36,37,38, 44,45,46,47,48,49,50 };

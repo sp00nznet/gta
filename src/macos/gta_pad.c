@@ -23,6 +23,11 @@
  * The stick and the dpad steer, the shoulders change weapon, Start (PS:
  * Options) is Esc. On a DualSense the touchpad opens the F10 settings menu.
  *
+ * GTA2 (gta_pad_profile_gta2) reads the keyboard through DirectInput, which
+ * tells the left Ctrl, Alt and Shift from the right ones: attack is the left
+ * Ctrl there, and the triggers are its two more keys, Special 2 (left Alt)
+ * and Special 3 (right Shift) -- its own defaults (0x591E9C in gta2.exe).
+ *
  * A pad macOS has no mapping for (a Bluetooth pad SDL did not recognise,
  * which happens before its first input report) is mapped by hand from its
  * USB vendor and product ids, the way SDL's own database does. And a pad
@@ -48,20 +53,33 @@ static const gta_key_t k_nextw = { 0x58, 0x2D };
 static const gta_key_t k_prevw = { 0x5A, 0x2C };
 static const gta_key_t k_spec  = { 0x09, 0x0F };
 static const gta_key_t k_esc   = { 0x1B, 0x01 };
+static const gta_key_t k_lctrl = { 0xA2, 0x1D };   /* GTA2: DirectInput's DIK_LCONTROL */
+static const gta_key_t k_lalt  = { 0xA4, 0x38 };   /* GTA2's Special 2 */
+static const gta_key_t k_rshift = { 0xA1, 0x36 };  /* GTA2's Special 3 */
 
 static SDL_GameController *g_pad;
 
 /* A button's state last pump: only the changes post messages, as a key does. */
 enum { BTN_A, BTN_B, BTN_X, BTN_Y, BTN_LB, BTN_RB, BTN_START, BTN_STICK_UP, BTN_STICK_DOWN,
        BTN_STICK_LEFT, BTN_STICK_RIGHT, BTN_DPAD_UP, BTN_DPAD_DOWN, BTN_DPAD_LEFT, BTN_DPAD_RIGHT,
-       BTN_TOUCH, BTN_COUNT };
-static const gta_key_t *const k_map[BTN_COUNT] = {
+       BTN_TOUCH, BTN_LT, BTN_RT, BTN_COUNT };
+static const gta_key_t *k_map[BTN_COUNT] = {
     [BTN_A] = &k_enter, [BTN_B] = &k_atk, [BTN_X] = &k_brake, [BTN_Y] = &k_spec,
     [BTN_LB] = &k_prevw, [BTN_RB] = &k_nextw, [BTN_START] = &k_esc,
     [BTN_STICK_UP] = &k_up, [BTN_STICK_DOWN] = &k_down, [BTN_STICK_LEFT] = &k_left, [BTN_STICK_RIGHT] = &k_right,
     [BTN_DPAD_UP] = &k_up, [BTN_DPAD_DOWN] = &k_down, [BTN_DPAD_LEFT] = &k_left, [BTN_DPAD_RIGHT] = &k_right,
 };
 static int g_held[BTN_COUNT];
+static const char *g_help = "A/cross the vehicle, B/circle attacks, X/square brakes, Y/triangle special, shoulders weapons";
+
+/* GTA2's bindings: the left Ctrl attacks, the triggers are Special 2 and 3. */
+void gta_pad_profile_gta2(void) {
+    k_map[BTN_B] = &k_lctrl;
+    k_map[BTN_LT] = &k_lalt;
+    k_map[BTN_RT] = &k_rshift;
+    g_help = "A/cross the vehicle, B/circle attacks, X/square jumps (brakes), Y/triangle special, "
+             "shoulders weapons, triggers specials 2 and 3";
+}
 
 /* the F10 menu (gta_menu.c): the DualSense touchpad opens it */
 void gta_menu_open(void);
@@ -124,10 +142,10 @@ static void pad_connect(void) {
         if (g_pad) {
             const char *name = SDL_GameControllerName(g_pad);
             SDL_GameControllerType t = SDL_GameControllerGetType(g_pad);
-            fprintf(stderr, "[pad] %s connected%s: stick/dpad steer, A/cross the vehicle, B/circle attacks, X/square brakes, Y/triangle special, shoulders weapons, Start/Options Esc%s\n",
+            fprintf(stderr, "[pad] %s connected%s: stick/dpad steer, %s, Start/Options Esc%s\n",
                     name ? name : "a controller",
                     t == SDL_CONTROLLER_TYPE_PS5 ? " (DualSense" :
-                    t == SDL_CONTROLLER_TYPE_PS4 ? " (DualShock" : "",
+                    t == SDL_CONTROLLER_TYPE_PS4 ? " (DualShock" : "", g_help,
                     t == SDL_CONTROLLER_TYPE_PS5 || t == SDL_CONTROLLER_TYPE_PS4 ? ", touchpad the menu)" : "");
         }
     }
@@ -163,4 +181,9 @@ void gta_pad_pump(void) {
     pad_button(BTN_DPAD_LEFT, SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_DPAD_LEFT));
     pad_button(BTN_DPAD_RIGHT, SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_DPAD_RIGHT));
     pad_button(BTN_TOUCH, SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_TOUCHPAD));
+    /* the triggers as buttons, with hysteresis (they are 0..32767) */
+    int lt = SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_TRIGGERLEFT);
+    int rt = SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
+    pad_button(BTN_LT, g_held[BTN_LT] ? lt > 8000 : lt > 16000);
+    pad_button(BTN_RT, g_held[BTN_RT] ? rt > 8000 : rt > 16000);
 }

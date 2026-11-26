@@ -158,6 +158,14 @@ the intro:
   without them its stores landed on the caller's saved registers -- the
   garbage pointer the level's object walk faulted on.
 
+Controls: GTA2's own keys (arrows, Ctrl attack, Enter the vehicle, Space
+jump and handbrake, Z/X weapons, Tab, Alt and right Shift the specials), and
+a controller on them as GTA1's: the stick and dpad steer, A/cross the
+vehicle, B/circle attacks, X/square jumps, Y/triangle special, the shoulders
+change weapon, the triggers are Specials 2 and 3, Start/Options is Esc, a
+DualSense's touchpad the menu. F10 (fn+F10, Cmd+M): scaling, fullscreen and
+sound, remembered in `gta2-macos.ini` beside the program.
+
 Bring-up levers, both hosts: `GTA_KEYS="15:enter,19:enter,40:up*3"` plays a
 key script (seconds from launch, `*S` holds a key S seconds; `--autotap S`
 is one Enter), `GTA_SHOTS=DIR` writes each sampled frame as a PPM,

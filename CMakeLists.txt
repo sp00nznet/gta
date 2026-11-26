@@ -118,9 +118,11 @@ if(APPLE)
             src/macos/gta2_dispatch.c
             src/macos/gta_keys.c
             src/macos/gta_hooks.c
+            src/macos/gta_menu.c
             src/macos/gta_mixer.c
             src/macos/gta_mss.c
             src/macos/gta_net.c
+            src/macos/gta_pad.c
             ${HLE_SOURCES}
             ${GTA2_RECOMP_SOURCES}
             ${DMAVIDEO_RECOMP_SOURCES}

@@ -35,6 +35,7 @@
 
 #include "win32hle.h"
 #include "gta_keys.h"
+#include "../remaster/remaster.h"   /* g_rm: the menu's settings */
 #include "pe_loader.h"
 #include "host.h"
 
@@ -46,6 +47,10 @@ extern const win32hle_shim gta_net_shims[];
 #define GTA2_EXE_NAME   "gta2.exe"
 
 static int g_headless, g_fullscreen = -1;   /* -1: as the settings say */
+void gta_menu_start_gta2(void);
+void gta_pad_profile_gta2(void);
+void gta_pad_start(void);
+void gta_pad_pump(void);
 static int g_autotap;                        /* --autotap S: press Enter after S seconds (bring-up: the input past the intro) */
 static unsigned g_watchdog_s;
 extern int win32hle_trace;
@@ -445,6 +450,7 @@ static void frame_pump(void) {
     const uint32_t *pal;
     int w, h, pitch, bpp;
     hle_screen_pump();
+    gta_pad_pump();                      /* the game does not poll SDL: the pad is read here */
     uint32_t now = hle_ticks_ms();
     if ((int32_t)(now - next) < 0 || !hle_dd_frame(&px, &w, &h, &pitch, &bpp, &pal, NULL)) return;
     next = now + 3333;
@@ -561,11 +567,14 @@ int main(int argc, char **argv) {
 
     if (chdir(game_full) != 0) { fprintf(stderr, "cannot enter %s\n", game_full); return 1; }
 
+    gta_menu_start_gta2();               /* gta2-macos.ini's settings, and F10 */
     if (scale && !hle_screen_scale(scale))
         fprintf(stderr, "[host] no scaling \"%s\": sharp, smooth, crt, nearest or integer\n", scale);
-    int full = g_fullscreen > 0;
+    int full = g_fullscreen > 0 || (g_fullscreen < 0 && g_rm.fullscreen);
     if (hle_screen_open("Grand Theft Auto 2", full, g_headless) != 0) return 1;
     hle_set_pump_hook(frame_pump);
+    gta_pad_profile_gta2();              /* a controller on GTA2's keys */
+    gta_pad_start();
     hle_dd_surface_qi_hook = surface_qi_hook;   /* dmavideo's gamma on the primary */
 
     if (g_watchdog_s) {

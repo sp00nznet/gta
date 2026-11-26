@@ -40,6 +40,7 @@ static int k_views[] = { 100, 90, 75, 60, 45 };
 
 static char g_ini[PATH_MAX];
 static int g_muted;
+static int g_gta2;                     /* GTA2's menu: its own ini, no remaster view */
 
 static hle_menu_item_t g_main[7], g_scale[SCALE_COUNT], g_res[NRES], g_view[5], g_sound[2];
 static char g_res_label[NRES][40], g_view_label[5][24];
@@ -108,10 +109,12 @@ static void save_all(void) {
     ini_set("present", "scale", scale);
     ini_set("present", "fullscreen", full ? "1" : "0");
     char v[16];
-    snprintf(v, sizeof v, "%dx%d", g_rm.res_w, g_rm.res_h);
-    ini_set("game", "res", v);
-    snprintf(v, sizeof v, "%d", g_rm.view);
-    ini_set("game", "view", v);
+    if (!g_gta2) {
+        snprintf(v, sizeof v, "%dx%d", g_rm.res_w, g_rm.res_h);
+        ini_set("game", "res", v);
+        snprintf(v, sizeof v, "%d", g_rm.view);
+        ini_set("game", "view", v);
+    }
     ini_set("sound", "mute", g_muted ? "1" : "0");
 }
 
@@ -156,23 +159,27 @@ static void menu_open(void) {
         hle_screen_settings(&bars, &full);
         g_main[n].label = "Fullscreen"; g_main[n].hint = "F11";
         g_main[n].id = ID_FULL, g_main[n].checked = full, n++; }
-    for (int k = 0; k < NRES; k++) {
+    for (int k = 0; k < NRES && !g_gta2; k++) {
         snprintf(g_res_label[k], sizeof g_res_label[k], "%d x %d%s",
                  k_res[k].w, k_res[k].h, k < 4 ? "" : " (widescreen)");
         g_res[k].label = g_res_label[k];
         g_res[k].id = ID_RES + k;
         g_res[k].checked = g_rm.res_w == k_res[k].w && g_rm.res_h == k_res[k].h;
     }
+    if (!g_gta2) {
     g_main[n].label = "Resolution"; g_main[n].hint = "next game";
     g_main[n].sub = g_res, g_main[n].nsub = NRES, g_main[n].id = 0, n++;
-    for (int k = 0; k < 5; k++) {
+    }
+    for (int k = 0; k < 5 && !g_gta2; k++) {
         snprintf(g_view_label[k], sizeof g_view_label[k], k_views[k] == 100 ? "100%% (original)" : "%d%% zoom out", k_views[k]);
         g_view[k].label = g_view_label[k];
         g_view[k].id = ID_VIEW + k;
         g_view[k].checked = g_rm.view == k_views[k];
     }
+    if (!g_gta2) {
     g_main[n].label = "View"; g_main[n].hint = "zoom";
     g_main[n].sub = g_view, g_main[n].nsub = 5, g_main[n].id = 0, n++;
+    }
     g_sound[0].label = "On",  g_sound[0].id = ID_SOUND, g_sound[0].checked = !g_muted;
     g_sound[1].label = "Muted", g_sound[1].id = ID_SOUND, g_sound[1].checked = g_muted;
     g_main[n].label = "Sound"; g_main[n].hint = NULL;
@@ -190,21 +197,24 @@ static int menu_key(int sdl_scancode, int down) {
     return 0;
 }
 
+/* GTA2's menu (gta2_main.c): gta2-macos.ini, scaling, fullscreen and sound. */
+void gta_menu_start_gta2(void);
+
 void gta_menu_start(void) {
     char v[64];
     if (hle_exe_path(g_ini, sizeof g_ini - 20)) {
         char *slash = strrchr(g_ini, '/');
-        strcpy(slash ? slash + 1 : g_ini, "gta-macos.ini");
+        strcpy(slash ? slash + 1 : g_ini, g_gta2 ? "gta2-macos.ini" : "gta-macos.ini");
         if (ini_get("present", "scale", v, sizeof v)) {
             if (!hle_screen_scale(v)) g_rm.scale = SCALE_SHARP;
             for (int k = 0; k < SCALE_COUNT; k++) if (!strcasecmp(v, k_scale[k])) g_rm.scale = k;
         }
         if (ini_get("present", "fullscreen", v, sizeof v) && !strcmp(v, "1")) g_rm.fullscreen = 1;
-        if (ini_get("game", "res", v, sizeof v)) {
+        if (!g_gta2 && ini_get("game", "res", v, sizeof v)) {
             int w, h;
             if (sscanf(v, "%dx%d", &w, &h) == 2 && w >= 640 && h >= 480) g_rm.res_w = w, g_rm.res_h = h;
         }
-        if (ini_get("game", "view", v, sizeof v)) {
+        if (!g_gta2 && ini_get("game", "view", v, sizeof v)) {
             int z = atoi(v);
             if (z >= 25 && z <= 100) g_rm.view = z;
         }
@@ -217,3 +227,5 @@ void gta_menu_start(void) {
 }
 
 void gta_menu_save(void) { save_all(); }
+
+void gta_menu_start_gta2(void) { g_gta2 = 1; gta_menu_start(); }
