@@ -3,7 +3,8 @@
   "repo": "sp00nznet/gta",
   "accent": "#e8b020",
   "note": {
-    "default": "The first build takes about 20 minutes and 3 GB. Python (with pefile and capstone) and the Visual Studio Build Tools with CMake (about 6 GB) are installed if they are missing; Windows asks for permission once. Choose Rockstar's freeware GTAINSTALLER.zip, a folder holding its data1.cab, or an extracted copy."
+    "windows": "The first build takes about 20 minutes and 3 GB. Python (with pefile and capstone) and the Visual Studio Build Tools with CMake (about 6 GB) are installed if they are missing; Windows asks for permission once. Choose Rockstar's freeware GTAINSTALLER.zip, a folder holding its data1.cab, or an extracted copy.",
+    "darwin": "The first build takes about 20 minutes and 3 GB (GTA2 about 10 more). It needs Xcode's command line tools (xcode-select --install) and Homebrew (brew.sh); CMake, Ninja, SDL2, ffmpeg and uv are installed with brew if missing. Choose the folder holding Rockstar's freeware GTAINSTALLER.zip (or its data1.cab, or an installed copy); with GTA2's GTA2.exe in it too, GTA2 is built as well."
   },
   "game": {
     "name": "Grand Theft Auto",
@@ -11,7 +12,8 @@
   },
   "sources": [{ "repo": "sp00nznet/pcrecomp", "ref": "gta", "dir": "pcrecomp" }],
   "setup": {
-    "default": ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "tools\setup.ps1", "-Yes", "-Game", "{game}"]
+    "windows": ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "tools\\setup.ps1", "-Yes", "-Game", "{game}"],
+    "darwin": ["bash", "setup.sh", "--yes", "--game-dir", "{game}"]
   },
-  "play": "Grand Theft Auto (recomp).lnk"
+  "play": "* (recomp).*"
 }

@@ -20,6 +20,7 @@ cmake-build-*/
 
 # Game files (user-supplied, copyrighted)
 game/
+game
 assets/
 *.zip
 *.iso
@@ -44,10 +45,24 @@ __pycache__/
 # ours to distribute -- generate it locally with tools/run_pipeline.py.
 src/recomp/gen/
 src/recomp/gen_london69/
+src/recomp/gen_gta2/
+src/recomp/gen_dmavideo/
+src/recomp/gen_d3ddll/
 
 # Game files from your own copy: never committed
 original/
 work/
 
-# Setup.cmd output
+# Setup.cmd and setup.sh output
 *.lnk
+* (recomp).command
+setup.log
+
+# macOS host: build output, runtime overlay and the user's own game material
+build-macos/
+macos-overlay/
+repack-extracted/
+GTA2INSTALLER/
+gta2-game/
+Grand Theft Auto (Repack) v2/
+*.cab

@@ -124,3 +124,8 @@ uint32_t hires_view_width(uint32_t v) {
     MEM8(v + 0x2C) = 0;                          /* square pixels */
     return (uint32_t)(((uint64_t)h * 4 * (uint64_t)g_rm.view) / 300);
 }
+
+/* tools/patch_gen.py hooks the city's frame limiter (sub_0047DC80) for the
+ * macOS host, which sleeps through it and presents on its boundary
+ * (src/macos/gta_hooks.c). This host keeps the original loop. */
+int gta_frame_wait(void) { return 0; }
